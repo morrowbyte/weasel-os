@@ -1412,3 +1412,7 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 - Core still had a fixed 20-minute expiry after the helper had been changed to follow task lifetime. Exact helper and owner PID/start-time binding now replaces that deadline for paired scopes; process death/reuse, end, Escape and epoch invalidation remain terminal. Legacy pre-helper begin can upgrade with its original token, but cannot replace an existing process binding.
 - The helper requires an explicit owner-lifetime acknowledgement before READY; old Core/new helper pairs refuse instead of claiming support. No runtime restart or activation during the concurrent Jarvis physical trial.
 - Four focused Python helper checks passed; laptop drv evaluation passed. Core compilation/regressions and package qualification run through the existing Blacksmith Computer Use workflow.
+
+## 2026-10-18 — Route the actual T3 development Electron identity
+- Real native dictation reached the correct T3 development window but keyboard auto typing lost trailing characters. Its actual app ID `com.t3tools.T3Code.Development` was missing from the existing known-Electron clipboard route.
+- Added that exact ID to the shared selector. Explicit keyboard/clipboard choices, other apps, Unicode length thresholds, clipboard payload/restore and Escape guards stay intact. One focused routing regression runs in the normal Blacksmith Core suite; no native replay or activation during the coordinator's cleanup.

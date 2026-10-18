@@ -185,6 +185,16 @@ enum TextMethod {
 fn default_text_method() -> TextMethod {
     TextMethod::Auto
 }
+fn text_uses_clipboard(app: &str, text: &str, method: &TextMethod) -> bool {
+    match method {
+        TextMethod::Clipboard => true,
+        TextMethod::Keyboard => false,
+        TextMethod::Auto => matches!(app,
+            "code" | "Code" | "com.visualstudio.code" | "com.t3tools.T3Code"
+            | "com.t3tools.T3CodeNightly" | "com.t3tools.T3Code.Development"
+        ) || text.chars().count() > 1000,
+    }
+}
 #[derive(Debug, Deserialize, Default, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum KeyScope {
@@ -2041,17 +2051,7 @@ fn execute(
                 .as_ref()
                 .and_then(|w| w["app_id"].as_str())
                 .unwrap_or("");
-            let electron_clipboard = matches!(
-                app,
-                "code"
-                    | "Code"
-                    | "com.visualstudio.code"
-                    | "com.t3tools.T3Code"
-                    | "com.t3tools.T3CodeNightly"
-            );
-            let clipboard = matches!(text_method, TextMethod::Clipboard)
-                || (matches!(text_method, TextMethod::Auto)
-                    && (electron_clipboard || text.chars().count() > 1000));
+            let clipboard = text_uses_clipboard(app, text, text_method);
             if clipboard {
                 let result = execute(
                     state,
@@ -3590,6 +3590,19 @@ mod action_schema_contract_tests {
             .clone()
     }
 
+    #[test]
+    fn actual_t3_development_text_uses_preserving_clipboard_without_changing_overrides() {
+        let app = "com.t3tools.T3Code.Development";
+        assert!(text_uses_clipboard(app, "Hello, Jarvis", &TextMethod::Auto));
+        assert!(!text_uses_clipboard(app, "Hello, Jarvis", &TextMethod::Keyboard));
+        assert!(text_uses_clipboard("other.app", "Hello, Jarvis", &TextMethod::Clipboard));
+        assert!(!text_uses_clipboard("com.t3tools.T3Code.Development.other", "short", &TextMethod::Auto));
+        assert!(!text_uses_clipboard("other.app", &"🦦".repeat(1000), &TextMethod::Auto));
+        assert!(text_uses_clipboard("other.app", &"🦦".repeat(1001), &TextMethod::Auto));
+        for existing in ["code", "Code", "com.visualstudio.code", "com.t3tools.T3Code", "com.t3tools.T3CodeNightly"] {
+            assert!(text_uses_clipboard(existing, "short", &TextMethod::Auto));
+        }
+    }
     #[test]
     fn variant_fields_and_required_members_match_actual_serde() {
         let samples = [
