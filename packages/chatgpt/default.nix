@@ -39,14 +39,14 @@
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "chatgpt";
-  version = "26.1007.21434";
+  version = "26.1013.40934";
 
   # The official documentation currently exposes a mutable `latest` link. The
   # versioned object below returned `Cache-Control: immutable` and was hashed
   # independently before it was pinned here.
   src = fetchurl {
     url = "https://persistent.oaistatic.com/codex-app-prod/linux/rpm/x86_64/chatgpt-${finalAttrs.version}-1.x86_64.rpm";
-    hash = "sha256-xFN99kH8hF6ABqHiEfanGCAaWsu/KEiCAMN4piW0MXg=";
+    hash = "sha256-SvApu6q2ClIgRm1bZ4taZO47G2PK2o8AAu5mBivIOV8=";
   };
 
   dontUnpack = true;

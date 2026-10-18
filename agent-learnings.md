@@ -1420,3 +1420,8 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 ## 2026-10-18 — Keep the T3 default handler without a duplicate association
 - The desktop updater removed the redundant T3 entry from Added Associations. The Default Applications entry still points to com.evilweasel.T3Code.desktop, verified against the installed Morrowbyte .55 launcher and existing profile. The owner approved retaining that exact deletion.
 - Verified the default entry remains, the duplicate is absent, and xdg-mime resolves the same installed desktop entry. No GUI launch or application restart was performed.
+
+### 2026-10-18 — batch candidate 20261018T103520Z-791f13e2
+
+- Updated existing configured sources: flake.lock, packages/chatgpt/default.nix, packages/t3code/source.json, profiles/system/base.nix.
+- Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.

@@ -275,6 +275,43 @@ in
     overlays = [
       (final: prev: {
         vesktop = final.callPackage ../../packages/vesktop-bin.nix { };
+        # Solaar 1.1.19 notification checks require a real private session bus
+        # and notification server; the Nix sandbox has neither by default.
+        # Keep every upstream test enabled and supply only test infrastructure.
+        solaar =
+          let
+            package = prev.solaar;
+          in
+          if package.version == "1.1.19" then
+            package.overrideAttrs (old: {
+              nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [
+                (lib.getBin final.dbus)
+                (lib.getBin final.dunst)
+                (lib.getBin final.glib)
+                final.xvfb-run
+              ];
+              preCheck = (old.preCheck or "") + ''
+                export XDG_CACHE_HOME="$TMPDIR/solaar-test-cache"
+                mkdir -p "$XDG_CACHE_HOME"
+                export FONTCONFIG_FILE="${final.makeFontsConf { fontDirectories = [ final.dejavu_fonts ]; }}"
+                dbus-daemon --config-file="${final.dbus}/share/dbus-1/session.conf" --fork --print-address=3 --print-pid=4 \
+                  3> "$TMPDIR/solaar-test-bus-address" 4> "$TMPDIR/solaar-test-bus-pid"
+                export DBUS_SESSION_BUS_ADDRESS="$(cat "$TMPDIR/solaar-test-bus-address")"
+                solaarTestBusPid="$(cat "$TMPDIR/solaar-test-bus-pid")"
+                xvfb-run -a dunst --config /dev/null > "$TMPDIR/solaar-test-notifications.log" 2>&1 &
+                solaarNotificationPid=$!
+                trap 'kill "$solaarNotificationPid" "$solaarTestBusPid" 2>/dev/null || true' EXIT
+                gdbus wait --session --timeout 10 org.freedesktop.Notifications
+              '';
+              postCheck = ''
+                kill "$solaarNotificationPid" "$solaarTestBusPid"
+                wait "$solaarNotificationPid" || true
+                trap - EXIT
+              ''
+              + (old.postCheck or "");
+            })
+          else
+            package;
       })
       inputs.millennium.overlays.default
     ];
