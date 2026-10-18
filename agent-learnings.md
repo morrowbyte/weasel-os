@@ -1416,3 +1416,7 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 ## 2026-10-18 — Route the actual T3 development Electron identity
 - Real native dictation reached the correct T3 development window but keyboard auto typing lost trailing characters. Its actual app ID `com.t3tools.T3Code.Development` was missing from the existing known-Electron clipboard route.
 - Added that exact ID to the shared selector. Explicit keyboard/clipboard choices, other apps, Unicode length thresholds, clipboard payload/restore and Escape guards stay intact. One focused routing regression runs in the normal Blacksmith Core suite; no native replay or activation during the coordinator's cleanup.
+
+## 2026-10-18 — Keep the T3 default handler without a duplicate association
+- The desktop updater removed the redundant T3 entry from Added Associations. The Default Applications entry still points to com.evilweasel.T3Code.desktop, verified against the installed Morrowbyte .55 launcher and existing profile. The owner approved retaining that exact deletion.
+- Verified the default entry remains, the duplicate is absent, and xdg-mime resolves the same installed desktop entry. No GUI launch or application restart was performed.
