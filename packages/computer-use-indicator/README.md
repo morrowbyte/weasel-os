@@ -92,10 +92,12 @@ Stdout events include a monotonic timestamp; timeout events additionally report
 the owned request start/elapsed time without exporting the actor payload.
 
 The helper registers one actor-owned task scope when its visible indicator
-starts and closes it on normal end, disconnect, stop or expiry. That scope
-keeps physical Escape effective across model-thinking gaps. The fixed 20-minute
-scope is never renewed; expiry only drops stale scope ownership and cannot
-resume any task. A resume warning returns an ownership `scope_token`; pass it
+starts and closes it on normal end, disconnect or stop. Core checks the exact
+PID/start-time of both helper and task owner, including before action admission
+and between actions. Owner-bound scopes have no elapsed-time cap; process death,
+Escape and epoch changes retire them without reopening a used task ID. Older
+clients without process binding retain their legacy stale-scope deadline. A new
+helper refuses READY if the actor cannot confirm owner-bound lifetime. A resume warning returns an ownership `scope_token`; pass it
 to `run --scope-token` with that exact task ID. Ordinary new tasks may omit the
 option and the helper creates a fresh token. Each `desktop_act` call must carry
 the indicator's exact task ID; multiple batches within that scope remain

@@ -138,7 +138,7 @@ def actor_call(actor_socket, tool, arguments):
     return result
 
 
-def desktop_lifecycle(actor_socket, task_id=None, event="status", binding=None, scope_token=None):
+def desktop_lifecycle(actor_socket, task_id=None, event="status", binding=None, scope_token=None, owner_processes=None):
     arguments = {"event": event}
     if task_id:
         arguments["task_id"] = task_id
@@ -147,6 +147,8 @@ def desktop_lifecycle(actor_socket, task_id=None, event="status", binding=None, 
     if binding is not None:
         arguments["session_id"] = binding["session_id"]
         arguments["expected_epoch"] = binding["epoch"]
+    if owner_processes is not None:
+        arguments["owner_processes"] = owner_processes
     result = actor_call(actor_socket, "desktop_indicator_lifecycle", arguments)
     return parse_lifecycle(result)
 
@@ -326,7 +328,12 @@ def run(args):
         # Set before sending: the actor can commit begin and then lose the ACK.
         # Finally must still attempt exact-owner cleanup in that ambiguous case.
         scope_begin_attempted = True
-        desktop_lifecycle(actor_socket, args.task_id, "begin", initial, scope_token)
+        registered = desktop_lifecycle(actor_socket, args.task_id, "begin", initial, scope_token, [
+            {"pid": metadata["pid"], "start_ticks": metadata["start_ticks"]},
+            {"pid": owner_pid, "start_ticks": owner_ticks},
+        ])
+        if registered.get("task_scope_lifetime") != "owner_process":
+            raise CapabilityError("actor does not support owner-bound task scope lifetime")
         renderer.stdin.write("v1 begin\n")
         renderer.stdin.flush()
         emit("starting", task_id=args.task_id, output=args.output, pid=os.getpid(), geometry=geometry)

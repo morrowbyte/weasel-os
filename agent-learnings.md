@@ -1407,3 +1407,8 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 ## 2026-10-18 — Keep desktop guidance aligned with end-to-end ownership
 - Removed unconditional extra Luna-child dispatch from the desktop skill; reuse the user's selected accountable feature owner and retain one physical writer. Prefer existing app APIs/plugins/MCP/ACP/A2A before shared-input fallback.
 - Documented live-schema-gated background AT-SPI use and runtime monitor selection. Older installed actors must not be sent invented fields. This is documentation only; no extra build or physical action was run.
+
+## 2026-10-18 — Bind long-running task scopes to their real owners
+- Core still had a fixed 20-minute expiry after the helper had been changed to follow task lifetime. Exact helper and owner PID/start-time binding now replaces that deadline for paired scopes; process death/reuse, end, Escape and epoch invalidation remain terminal. Legacy pre-helper begin can upgrade with its original token, but cannot replace an existing process binding.
+- The helper requires an explicit owner-lifetime acknowledgement before READY; old Core/new helper pairs refuse instead of claiming support. No runtime restart or activation during the concurrent Jarvis physical trial.
+- Four focused Python helper checks passed; laptop drv evaluation passed. Core compilation/regressions and package qualification run through the existing Blacksmith Computer Use workflow.

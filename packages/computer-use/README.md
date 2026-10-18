@@ -21,8 +21,10 @@ Completed/partial effects remain reported and are never replayed. A real
 explicit desktop takeover remains a separate persistent stop.
 
 The indicator opens an actor-owned task scope when it begins and closes it on
-end, disconnect, stop or lease expiry. Its fixed 20-minute bound is not renewed;
-expiry only drops stale scope ownership and never resumes work. After Escape,
+end, disconnect or stop. The helper binds its own PID/start-time and its task
+owner's PID/start-time to that scope. Both processes must remain live; there is
+no elapsed-time cap on an owner-bound job or approval wait. Old clients without
+process binding retain the legacy 20-minute stale-scope deadline. After Escape,
 the agent stops the current turn's desktop work. User steering or a continuation
 request in a new turn permits a fresh task ID and indicator without a separate
 unlock prompt or warning delay. The actor retains used task IDs so the stopped

@@ -107,9 +107,39 @@ struct SemanticTarget {
 }
 #[derive(Clone)]
 struct TaskScope {
+    // Compatibility deadline for callers that have not attached a live helper.
     expires: Instant,
+    owner_processes: Option<[ScopeProcess; 2]>,
     epoch: u64,
     scope_token: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ScopeProcess {
+    pid: u32,
+    start_ticks: u64,
+}
+impl ScopeProcess {
+    fn is_live(&self) -> bool {
+        let process = PathBuf::from(format!("/proc/{}", self.pid));
+        if self.pid == 0 || !fs::metadata(&process).is_ok_and(|meta| meta.uid() == uid()) {
+            return false;
+        }
+        let Ok(raw) = fs::read_to_string(process.join("stat")) else { return false };
+        let Some((_, fields)) = raw.rsplit_once(") ") else { return false };
+        let fields: Vec<_> = fields.split_whitespace().collect();
+        !matches!(fields.first().copied(), None | Some("Z" | "X" | "x"))
+            && fields.get(19).and_then(|ticks| ticks.parse::<u64>().ok()) == Some(self.start_ticks)
+    }
+}
+impl TaskScope {
+    fn is_live(&self) -> bool {
+        match &self.owner_processes {
+            Some(processes) => processes.iter().all(ScopeProcess::is_live),
+            None => self.expires > Instant::now(),
+        }
+    }
 }
 
 struct State {
@@ -366,7 +396,7 @@ fn authorize_action_task(
     generated: String,
 ) -> R<(String, bool)> {
     let mut scopes = state.task_scopes.lock().map_err(|_| "Task scopes poisoned")?;
-    scopes.retain(|_, scope| scope.expires > Instant::now());
+    scopes.retain(|_, scope| scope.is_live());
     if scopes.len() > 1 {
         return Err("Action admission requires one unambiguous live Computer Use task scope".into());
     }
@@ -391,7 +421,7 @@ fn authorize_action_task(
 
 fn action_scope_still_live(state: &State, task_id: &str) -> bool {
     state.task_scopes.lock().is_ok_and(|mut scopes| {
-        scopes.retain(|_, scope| scope.expires > Instant::now());
+        scopes.retain(|_, scope| scope.is_live());
         scopes.get(task_id).is_some_and(|scope| {
             scope.epoch == state.epoch.load(Ordering::SeqCst)
         })
@@ -423,7 +453,7 @@ fn physical_activity(state: &State, escape: bool, simulation: bool) {
     }
     let active_live = state.active.lock().map_or(true, |active| !active.is_null());
     let scope_live = state.task_scopes.lock().map_or(true, |mut scopes| {
-        scopes.retain(|_, scope| scope.expires > Instant::now());
+        scopes.retain(|_, scope| scope.is_live());
         !scopes.is_empty()
     });
     let task_live = active_live || state.queued.load(Ordering::SeqCst) != 0 || scope_live;
@@ -2474,6 +2504,9 @@ fn act_inner(state: &State, args: &Value, epoch: u64) -> R<Value> {
                 guard = visual_guard(state, &obs, action, epoch)?;
                 validate(state, &obs, parsed.window_id, true)?;
             }
+            if indicator_scope_owned && !action_scope_still_live(state, &task) {
+                return Err("Computer Use task owner ended before dispatch; remaining actions discarded".into());
+            }
             dispatched = true;
             record(
                 state,
@@ -3220,8 +3253,18 @@ fn indicator_lifecycle(state: &State, args: &Value) -> R<Value> {
         {
             return Err("Task scope requires an unlatched, idle, released actor; it cannot resume a stopped task".into());
         }
+        let owner_processes = if let Some(value) = args.get("owner_processes") {
+            let processes: [ScopeProcess; 2] = serde_json::from_value(value.clone())
+                .map_err(|_| "Task scope requires exact helper and owner process identities")?;
+            if !processes.iter().all(ScopeProcess::is_live) {
+                return Err("Task scope helper or owner process is no longer live".into());
+            }
+            Some(processes)
+        } else {
+            None
+        };
         let mut scopes = state.task_scopes.lock().map_err(|_| "Task scopes poisoned")?;
-        scopes.retain(|_, scope| scope.expires > Instant::now());
+        scopes.retain(|_, scope| scope.is_live());
         if !scopes.is_empty() && !scopes.contains_key(task_id) {
             return Err("Another Computer Use task scope is already live; end or release it before starting a new task".into());
         }
@@ -3233,9 +3276,18 @@ fn indicator_lifecycle(state: &State, args: &Value) -> R<Value> {
                 }
                 match scope.scope_token.as_deref() {
                     Some(existing) if existing == scope_token => {
-                        return Ok(text_result(json!({"schema":1,"lifecycle_revision":3,"complete":true,"session_id":state.session_id,"epoch":state.epoch.load(Ordering::SeqCst),"takeover_latched":false,"actor_active":false,"task_scope_active":true,"queued_batches":state.queued.load(Ordering::SeqCst),"actor_release_confirmed":true})))
+                        if let Some(processes) = owner_processes {
+                            if scope.owner_processes.as_ref().is_some_and(|bound| bound != &processes) {
+                                return Err("Task scope process ownership cannot be replaced".into());
+                            }
+                            scope.owner_processes = Some(processes);
+                        }
+                        return Ok(text_result(json!({"schema":1,"lifecycle_revision":3,"complete":true,"session_id":state.session_id,"epoch":state.epoch.load(Ordering::SeqCst),"takeover_latched":false,"actor_active":false,"task_scope_active":true,"task_scope_lifetime":if scope.owner_processes.is_some(){"owner_process"}else{"legacy_deadline"},"queued_batches":state.queued.load(Ordering::SeqCst),"actor_release_confirmed":true})))
                     }
-                    None => scope.scope_token = Some(scope_token.to_string()),
+                    None => {
+                        scope.scope_token = Some(scope_token.to_string());
+                        scope.owner_processes = owner_processes;
+                    }
                     Some(_) => return Err("Task scope ownership token differs from the current owner".into()),
                 }
             } else {
@@ -3245,6 +3297,7 @@ fn indicator_lifecycle(state: &State, args: &Value) -> R<Value> {
             used.insert(task_id.to_string());
             scopes.insert(task_id.to_string(), TaskScope {
                 expires: Instant::now() + Duration::from_secs(20 * 60),
+                owner_processes,
                 epoch: binding_epoch.unwrap_or_default(),
                 scope_token: Some(scope_token.to_string()),
             });
@@ -3272,7 +3325,7 @@ fn indicator_lifecycle(state: &State, args: &Value) -> R<Value> {
     let queued = state.queued.load(Ordering::SeqCst);
     let task_scope_active = task_id.is_some_and(|task_id| {
         state.task_scopes.lock().is_ok_and(|mut scopes| {
-            scopes.retain(|_, scope| scope.expires > Instant::now());
+            scopes.retain(|_, scope| scope.is_live());
             scopes.get(task_id).is_some_and(|scope| {
                 scope.epoch == binding_epoch.unwrap_or_default()
                     && scope_token.is_some_and(|token| scope.scope_token.as_deref() == Some(token))
@@ -3281,7 +3334,10 @@ fn indicator_lifecycle(state: &State, args: &Value) -> R<Value> {
         })
     });
     drop(active);
-    Ok(text_result(json!({
+    let owner_bound = task_id.is_some_and(|id| state.task_scopes.lock().is_ok_and(|scopes| {
+        scopes.get(id).is_some_and(|scope| scope.owner_processes.is_some())
+    }));
+    let mut reply = json!({
         "schema":1,"lifecycle_revision":3,"complete":true,
         "session_id":state.session_id,
         "task_scope_active":task_scope_active,
@@ -3289,7 +3345,11 @@ fn indicator_lifecycle(state: &State, args: &Value) -> R<Value> {
         "takeover_latched":state.takeover.load(Ordering::SeqCst),
         "actor_active":actor_active,"queued_batches":queued,
         "actor_release_confirmed":release_confirmed
-    })))
+    });
+    if task_id.is_some() {
+        reply["task_scope_lifetime"] = json!(if owner_bound { "owner_process" } else { "legacy_deadline" });
+    }
+    Ok(text_result(reply))
 }
 
 fn handle(state: &State, tool: &str, args: &Value, epoch: u64) -> R<Value> {
@@ -4977,6 +5037,53 @@ mod indicator_lifecycle_tests {
         assert_eq!(idle["actor_release_confirmed"], false);
         fs::remove_dir_all(dir).unwrap();
     }
+    fn process_binding(pid: u32) -> ScopeProcess {
+        let raw = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        let (_, fields) = raw.rsplit_once(") ").unwrap();
+        ScopeProcess { pid, start_ticks: fields.split_whitespace().nth(19).unwrap().parse().unwrap() }
+    }
+    #[test]
+    fn helper_upgrade_outlives_old_deadline_but_owner_death_is_terminal() {
+        let (state, dir) = release_recovery_tests::cooperative_fixture("owner-process-lifetime");
+        let mut child = Command::new("sleep").arg("60").spawn().unwrap();
+        let helper = process_binding(std::process::id());
+        let owner = process_binding(child.id());
+        let base = json!({"event":"begin","task_id":"long-job","session_id":state.session_id,"expected_epoch":77,"scope_token":"own-token"});
+        indicator_lifecycle(&state, &base).unwrap();
+        let mut bound = base.clone();
+        bound["owner_processes"] = json!([helper, owner]);
+        let registered = data(&indicator_lifecycle(&state, &bound).unwrap());
+        state.task_scopes.lock().unwrap().get_mut("long-job").unwrap().expires = Instant::now() - Duration::from_secs(1);
+        let live_past_deadline = action_scope_still_live(&state, "long-job");
+        let admission = authorize_action_task(&state, Some("long-job"), "unused".into());
+        let mut replacement = bound.clone();
+        replacement["owner_processes"] = json!([helper, helper]);
+        let replacement_refused = indicator_lifecycle(&state, &replacement).is_err();
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let live_after_death = action_scope_still_live(&state, "long-job");
+        assert_eq!(registered["task_scope_lifetime"], "owner_process");
+        assert!(live_past_deadline);
+        assert_eq!(admission.unwrap(), ("long-job".into(), true));
+        assert!(replacement_refused);
+        assert!(!live_after_death);
+        assert!(indicator_lifecycle(&state, &base).unwrap_err().contains("already used"));
+        assert!(authorize_action_task(&state, Some("long-job"), "unused".into()).is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn process_binding_rejects_wrong_generation_and_dead_owner() {
+        let current = process_binding(std::process::id());
+        assert!(current.is_live());
+        assert!(!ScopeProcess { start_ticks: current.start_ticks + 1, ..current.clone() }.is_live());
+        assert!(!ScopeProcess { pid: 0, start_ticks: 0 }.is_live());
+        let (state, dir) = release_recovery_tests::cooperative_fixture("bad-owner-process");
+        let bad = json!({"event":"begin","task_id":"bad-owner","session_id":state.session_id,"expected_epoch":77,"scope_token":"own-token","owner_processes":[{"pid":0,"start_ticks":0},{"pid":current.pid,"start_ticks":current.start_ticks}]});
+        assert!(indicator_lifecycle(&state, &bad).is_err());
+        assert!(state.task_scopes.lock().unwrap().is_empty());
+        assert!(state.task_scope_ids.lock().unwrap().is_empty());
+        fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn stale_scope_cleanup_cannot_end_a_different_current_binding() {
         let (state, dir) = release_recovery_tests::cooperative_fixture("lifecycle-owner-token");
@@ -5100,6 +5207,7 @@ mod release_recovery_tests {
             task_id.to_string(),
             TaskScope {
                 expires: Instant::now() + Duration::from_secs(60),
+                owner_processes: None,
                 epoch: state.epoch.load(Ordering::SeqCst),
                 scope_token: Some(format!("test-owner-{task_id}")),
             },

@@ -67,6 +67,7 @@ class IndicatorLifecycle(unittest.TestCase):
         self.task_scopes = {}
         self.actor_events = []
         self.drop_begin_ack_once = False
+        self.supports_owner_lifetime = True
         self.actor_lock = threading.Lock()
         self.receipt_runs = []
         self.control_requests = []
@@ -164,6 +165,8 @@ class IndicatorLifecycle(unittest.TestCase):
                         "session_id": arguments.get("session_id"),
                         "expected_epoch": arguments.get("expected_epoch"),
                     }
+                    if owner is not None and self.supports_owner_lifetime:
+                        state["task_scope_lifetime"] = "owner_process"
                     drop_begin_ack = event == "begin" and self.drop_begin_ack_once
                     if drop_begin_ack:
                         self.drop_begin_ack_once = False
@@ -241,6 +244,28 @@ class IndicatorLifecycle(unittest.TestCase):
         self.receipt_runs.append({"observed_process_end_monotonic":time.monotonic(), "events":events, "renderer_protocol":self.protocol(), "actor_requests":copy.deepcopy(self.actor_requests), "returncode":process.returncode})
         self.assertTrue(all(type(x.get("monotonic")) in (float, int) for x in events))
         return ended
+
+    def test_old_core_cannot_claim_owner_lifetime_ready(self):
+        self.supports_owner_lifetime = False
+        process = self.launch("old-core")
+        ended = self.ended(process)
+        self.assertEqual(ended["reason"], "capability_unavailable")
+        self.assertNotIn("ready", [event["event"] for event in self.last_events])
+        self.assertEqual(self.task_scopes, {})
+        self.assertNotIn("v1 begin", [item["line"] for item in self.protocol()])
+
+    def test_begin_binds_helper_and_task_owner_processes(self):
+        process = self.launch("process-bound", extra=("--stdin-control",))
+        self.ready(process)
+        begin = next(request["arguments"] for request in self.actor_events if request["arguments"].get("event") == "begin")
+        self.assertEqual(begin["owner_processes"], [
+            {"pid": process.pid, "start_ticks": indicator.process_start_ticks(process.pid)},
+            {"pid": os.getpid(), "start_ticks": indicator.process_start_ticks(os.getpid())},
+        ])
+        process.stdin.write("v1 end\n")
+        process.stdin.flush()
+        process.wait(timeout=2)
+        self.assertEqual(process.returncode, 0)
 
     def test_lost_begin_ack_cleanup_uses_exact_owner_and_removes_committed_scope(self):
         self.drop_begin_ack_once = True
