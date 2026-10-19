@@ -1420,3 +1420,8 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 ## 2026-10-18 — Keep the T3 default handler without a duplicate association
 - The desktop updater removed the redundant T3 entry from Added Associations. The Default Applications entry still points to com.evilweasel.T3Code.desktop, verified against the installed Morrowbyte .55 launcher and existing profile. The owner approved retaining that exact deletion.
 - Verified the default entry remains, the duplicate is absent, and xdg-mime resolves the same installed desktop entry. No GUI launch or application restart was performed.
+
+## 2026-10-19 — Remove archival mode and retire unused Paperless
+- Removed the cloud-backup archive/eviction CLI and its tar/zstd dependencies; existing Proton archives and Restic recovery remain. The installed helper already expanded absolute Home exclusions: testing the raw pattern file alone was misleading. Normalize relative backup sources before expanding source-relative patterns.
+- Real installed Restic dry-runs verified Steam/Trash/cache/node_modules exclusions and retained source/Git/profiles/DB/saves/recovery archives for absolute and relative sources; archive mode rejects before cloud access. Paperless-only stopped Compose containers/configs were retired after private tar archives compared successfully against all original data; raw originals remain, with only their exact retired path excluded from future backups.
+- Verification: focused TEST_RESTIC tests (2 PASS), Python AST, nix-instantiate --parse programs/cloud-backup.nix, git diff --check, laptop drvPath evaluation. No host build/activation: reserve below 65 GiB and existing resource-only preflight fence retained.

@@ -23,6 +23,7 @@ def load(name, file):
 
 retention = load('retention', 'weasel-storage-retention.py')
 transport = load('transport', 'proton-restic-server.py')
+backup = load('backup', 'weasel-cloud-backup.py')
 
 
 class MemoryDrive:
@@ -101,6 +102,77 @@ class RecoveryTests(unittest.TestCase):
         rows[1]['userdata'] = {'weasel-daily-update': 'yes'}
         rows[2]['userdata'] = {'weasel-retain': 'yes'}
         self.assertEqual(retention.snapshot_plan(rows)['keep'], [1, 2, 6, 7, 8])
+
+    def test_source_relative_excludes_real_restic_dryrun(self):
+        restic = os.environ.get('TEST_RESTIC')
+        if not restic:
+            self.skipTest('TEST_RESTIC needs installed restic path')
+        excluded = [
+            '.local/share/Steam/steamapps/common/game/payload',
+            '.local/share/Trash/files/trashed', '.cache/rebuildable',
+            'source/project/node_modules/dependency',
+            'source/project/target/debug/binary',
+            'source/system/services/docker/paperless-ngx/db/retained',
+        ]
+        included = [
+            'source/project/main.rs', 'source/project/.git/config',
+            '.codex/sessions/turn.jsonl', '.config/application/profile',
+            '.local/share/application/database.sqlite',
+            '.local/share/Steam/userdata/save',
+            '.local/share/weasel-retired-services/paperless.tar.zst',
+            'source/system/services/docker/other-service/db/keep',
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'home'
+            for name in excluded + included:
+                item = source / name
+                item.parent.mkdir(parents=True, exist_ok=True)
+                item.write_text('fixture')
+            env = dict(os.environ, RESTIC_PASSWORD='local-fixture-only',
+                       RESTIC_REPOSITORY=str(root / 'repo'))
+            def run(*args):
+                result = subprocess.run([restic, '--no-cache', *args], env=env,
+                                        cwd=root, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return result.stdout
+            run('init')
+            patterns = (ROOT / 'config/backup-excludes.txt').read_text()
+            absolute = backup.backup_excludes(source, patterns)
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                relative = backup.backup_excludes(Path('home'), patterns)
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(absolute, relative)
+            self.assertIn('**/node_modules', absolute.splitlines())
+            self.assertIn(str(source) + '/.local/share/Trash', absolute.splitlines())
+            rules = root / 'rules'
+            rules.write_text(absolute)
+            for spelling in (str(source), 'home'):
+                output = run('backup', '--dry-run', '--json', '--verbose=2',
+                             '--exclude-file', str(rules), spelling)
+                events = [json.loads(line) for line in output.splitlines()]
+                files = {row['item'] for row in events
+                         if row.get('message_type') == 'verbose_status'
+                         and row.get('action') == 'new' and row['item'] != ''}
+                # Restic reports relative sources under /<source-name>, even
+                # though anchored exclusion matching uses their absolute path.
+                reported = source if Path(spelling).is_absolute() else Path('/home')
+                for name in excluded:
+                    self.assertNotIn(str(reported / name), files, spelling + ': ' + name)
+                for name in included:
+                    self.assertIn(str(reported / name), files, spelling + ': ' + name)
+            self.assertEqual(json.loads(run('snapshots', '--json')), [])
+
+    def test_archive_mode_rejected_before_cloud_access(self):
+        result = subprocess.run([
+            os.sys.executable, str(ROOT / 'scripts/weasel-cloud-backup.py'),
+            'archive', '--excludes', str(ROOT / 'config/backup-excludes.txt')],
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('invalid choice', result.stderr)
 
     def test_real_restic_roundtrip_and_access_control(self):
         restic = os.environ.get('TEST_RESTIC')
