@@ -1425,3 +1425,8 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 
 - Updated existing configured sources: flake.lock, packages/chatgpt/default.nix, packages/t3code/source.json, profiles/system/base.nix.
 - Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
+
+## 2026-10-19 — Remove archival mode and retire unused Paperless
+- Removed the cloud-backup archive/eviction CLI and its tar/zstd dependencies; existing Proton archives and Restic recovery remain. The installed helper already expanded absolute Home exclusions: testing the raw pattern file alone was misleading. Normalize relative backup sources before expanding source-relative patterns.
+- Real installed Restic dry-runs verified Steam/Trash/cache/node_modules exclusions and retained source/Git/profiles/DB/saves/recovery archives for absolute and relative sources; archive mode rejects before cloud access. Paperless-only stopped Compose containers/configs were retired after private tar archives compared successfully against all original data; raw originals remain, with only their exact retired path excluded from future backups.
+- Verification: focused TEST_RESTIC tests (2 PASS), Python AST, nix-instantiate --parse programs/cloud-backup.nix, git diff --check, laptop drvPath evaluation. No host build/activation: reserve below 65 GiB and existing resource-only preflight fence retained.

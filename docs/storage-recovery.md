@@ -268,30 +268,23 @@ bei Systemdateien wichtig; Root-Daten erst nach Prüfung als Root installieren.
 
 ## Selten gebrauchte Dateien auslagern
 
-Für lesbare persönliche Archive gibt es den getrennten Bereich
-`/my-files/Weasel-Archive`. Restic-Backups dienen Recovery; Archivdateien sind
-direkt in Drive verfügbar. Alter oder `atime` allein beweisen nicht, dass ein
-Projekt nicht mehr gebraucht wird: Scans und Backups verändern Zugriffszeiten.
+Der frühere Archiv-/Eviktionsmodus von `weasel-cloud-backup` ist entfernt.
+Bestehende Archive unter `/my-files/Weasel-Archive` und ihre Restorekataloge
+bleiben erhalten. Vorhandene `.tar.zst`-Archive lassen sich über die offizielle
+Proton-Drive-CLI herunterladen und in ein neues Verzeichnis entpacken.
 
-Archivierung wird deshalb pro bewusst ausgewähltem Bestand ausgeführt. Erst
-Upload, anschließend Rückdownload und SHA256-Vergleich, erst dann darf die lokale
-Kopie entfernt werden. Aktive Projekte, Buildverzeichnisse und deren Dependencies
-werden nicht automatisch nach Alter ausgelagert. Die SSD liegt nach der
-Snapshot-Bereinigung bereits unter dem Ziel, daher besteht keine Notwendigkeit,
-heute ungeprüft weitere persönliche Dateien zu entfernen.
+Die mit `/` beginnenden Ausschlüsse in `config/backup-excludes.txt` sind relativ
+zur Sicherungsquelle (standardmäßig Home). Der Helper normalisiert auch relative
+`--source`-Pfade und erweitert diese Regeln vor Restic zu absoluten Pfaden.
+Die Datei darf deshalb nicht unverändert an Restic übergeben werden.
+Glob-Regeln wie `**/node_modules` bleiben unverändert.
 
-```bash
-# Gewählten Bestand hochladen und vollständig zurücklesen/hashprüfen:
-weasel-cloud-backup archive --source /home/evilweasel/Downloads/GEWAEHLTER_BESTAND
-# Danach die bewusst gewählte lokale Kopie entfernen:
-weasel-cloud-backup archive --source /home/evilweasel/Downloads/GEWAEHLTER_BESTAND --evict
-```
-
-Aktive Prozessreferenzen und Änderungen während des Archivierens blockieren die
-lokale Entfernung. Die Quelle wird nicht nach Alter automatisch ausgewählt.
-Die Archive erhalten Datum und eindeutige Namen; der letzte private Prüfbeleg ist
-`~/.local/state/weasel-backup/last-archive.json`. Zum Zurückholen das `.tar.zst`
-in Drive herunterladen und zunächst in ein neues Verzeichnis entpacken.
+Paperless ist stillgelegt. Die ursprünglichen Rohdaten bleiben lokal erhalten;
+der verifizierte, lesbare Recovery-Stand liegt unter
+`~/.local/share/weasel-retired-services/`. Nur der konkrete stillgelegte
+Rohdatenpfad ist vom Home-Backup ausgeschlossen, nicht der Recovery-Stand und
+keine anderen Quellen oder Datenbanken. Seine ursprünglichen Compose-Dateien
+sind im Recovery-Archiv enthalten; es gibt keinen automatischen Neustart.
 
 ## Quellen und Transportprüfungen
 

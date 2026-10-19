@@ -2,122 +2,30 @@
 """Versioned cloud backup and recovery, using restic and official Proton Drive."""
 import argparse
 import fcntl
-import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import secrets
-import shutil
 import subprocess
 import tempfile
 import time
-import stat
 
 spec = importlib.util.spec_from_file_location('transport', Path(__file__).with_name('proton-restic-server.py'))
 transport = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(transport)
 
 
-def fingerprint(source):
-    paths = [source, *source.rglob('*')] if source.is_dir() else [source]
-    rows = []
-    for path in paths:
-        s = path.lstat()
-        rows.append((str(path.relative_to(source.parent)), s.st_dev, s.st_ino,
-                     s.st_mode, s.st_size, s.st_mtime_ns,
-                     os.readlink(path) if path.is_symlink() else ''))
-    return sorted(rows)
-
-
-def active_references(source):
-    prefix = str(source) + '/'
-    for proc in Path('/proc').iterdir():
-        if not proc.name.isdigit():
-            continue
-        try:
-            if proc.stat().st_uid != os.getuid():
-                continue
-            links = [proc / 'cwd', proc / 'exe', *(proc / 'fd').iterdir()]
-            for link in links:
-                try:
-                    target = os.readlink(link)
-                    if target == str(source) or target.startswith(prefix):
-                        return True
-                except OSError:
-                    pass
-            for line in (proc / 'maps').read_text().splitlines():
-                parts = line.split(maxsplit=5)
-                if len(parts) == 6 and (parts[5] == str(source) or parts[5].startswith(prefix)):
-                    return True
-        except OSError:
-            continue
-    return False
-
-
-def archive(args, drive, spool, state):
-    if args.source.is_symlink():
-        raise RuntimeError('Archive source must not be a symlink')
-    source = args.source.resolve(strict=True)
-    if source.is_symlink() or not source.exists() or source == Path.home() or Path.home().is_relative_to(source):
-        raise RuntimeError('Select one existing regular file or directory below the home directory')
-    if not source.is_relative_to(Path.home()) or source.is_relative_to(state):
-        raise RuntimeError('Archive source must be a personal path outside the job state')
-    if active_references(source):
-        raise RuntimeError('Selected archive has active process references')
-    before = fingerprint(source)
-    if any(not (stat.S_ISREG(row[3]) or stat.S_ISDIR(row[3]) or stat.S_ISLNK(row[3])) for row in before):
-        raise RuntimeError('Special files in archive source; local source retained')
-    estimated = sum(row[4] for row in before if stat.S_ISREG(row[3]))
-    disk = shutil.disk_usage(state)
-    if disk.free - 2 * estimated < disk.total * .20:
-        raise RuntimeError('Not enough staging space to remain below 80%; choose a smaller archive')
-    parent = '/my-files/Weasel-Archive'
-    roots = drive.rows(drive.command('list', '/my-files'))
-    if 'Weasel-Archive' not in roots:
-        drive.command('create-folder', '/my-files', 'Weasel-Archive')
-    name = time.strftime('%Y%m%dT%H%M%S-') + secrets.token_hex(4) + '-' + source.name + '.tar.zst'
-    pack = Path(spool) / name
-    subprocess.run(['tar', '--zstd', '--xattrs', '--acls', '-cpf', str(pack),
-                    '-C', str(source.parent), '--', source.name], check=True)
-    if before != fingerprint(source):
-        raise RuntimeError('Source changed while archiving; local source retained')
-    def digest(path):
-        with path.open('rb') as stream:
-            return hashlib.file_digest(stream, 'sha256').hexdigest()
-    expected = digest(pack)
-    drive.command('upload', '-f', 'skip', '-t', str(pack), parent)
-    with tempfile.TemporaryDirectory(dir=spool) as downloaded:
-        drive.command('download', '-f', 'skip', parent + '/' + name, downloaded)
-        if digest(Path(downloaded) / name) != expected:
-            raise RuntimeError('Archive cloud readback hash mismatch; local source retained')
-    receipt = {'time': time.time(), 'source': str(source), 'remote': parent + '/' + name,
-               'sha256': expected, 'bytes': pack.stat().st_size, 'verified': True, 'evicted': False}
-    if args.evict:
-        if before != fingerprint(source) or active_references(source):
-            raise RuntimeError('Source changed or became active after verification; local source retained')
-        quarantine_root = state / ('archive-quarantine-' + secrets.token_hex(8))
-        quarantine_root.mkdir(mode=0o700)
-        retained = quarantine_root / source.name
-        source.rename(retained)
-        if before != fingerprint(retained) or active_references(retained) or active_references(source):
-            if not source.exists():
-                retained.rename(source)
-                quarantine_root.rmdir()
-            raise RuntimeError('Archive changed during eviction; retained locally, see archive quarantine if source path was recreated')
-        if retained.is_dir():
-            shutil.rmtree(retained)
-        else:
-            retained.unlink()
-        quarantine_root.rmdir()
-        receipt['evicted'] = True
-    (state / 'last-archive.json').write_text(json.dumps(receipt, indent=2))
-    print(json.dumps(receipt, indent=2))
+def backup_excludes(source, patterns):
+    """Anchor source-relative rules for Restic's absolute path matching."""
+    root = str(source.expanduser().resolve(strict=True))
+    return '\n'.join(root + line if line.startswith('/') else line
+                     for line in patterns.splitlines()) + '\n'
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('mode', choices=['probe', 'backup', 'snapshots', 'check', 'restore', 'maintain', 'archive'])
+    p.add_argument('mode', choices=['probe', 'backup', 'snapshots', 'check', 'restore', 'maintain'])
     p.add_argument('--cli', default='proton-drive')
     p.add_argument('--restic', default='restic')
     p.add_argument('--excludes', type=Path, required=True)
@@ -127,8 +35,8 @@ def main():
     p.add_argument('--snapshot', default='latest')
     p.add_argument('--tag', choices=['personal-state', 'system-state'], default='personal-state')
     p.add_argument('--probe-system', action='store_true')
-    p.add_argument('--evict', action='store_true', help='For selected archives only: remove local source after full verified readback')
     args = p.parse_args()
+    args.source = args.source.expanduser().resolve(strict=True)
     os.umask(0o077)
     state = Path.home() / '.local/state/weasel-backup'
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -136,9 +44,6 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with tempfile.TemporaryDirectory(prefix='spool-', dir=state) as spool:
             drive = transport.Drive(args.cli, args.root, spool)
-            if args.mode == 'archive':
-                archive(args, drive, spool, state)
-                return
             drive.folders()
             parent = args.root.rsplit('/', 1)[0]
             key_name = 'nixy-laptop-restic-password.txt'
@@ -181,8 +86,7 @@ def main():
             # Restic matches absolute source paths. Expand the declared
             # home-relative rules against the actual backup source.
             excludes = Path(spool) / 'excludes.txt'
-            excludes.write_text('\n'.join(str(args.source) + line if line.startswith('/') else line
-                                          for line in args.excludes.read_text().splitlines()) + '\n')
+            excludes.write_text(backup_excludes(args.source, args.excludes.read_text()))
 
             try:
                 if 'config' not in drive.listing(''):

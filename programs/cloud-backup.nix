@@ -11,8 +11,6 @@ let
     runtimeInputs = [
       pkgs.python3
       pkgs.restic
-      pkgs.gnutar
-      pkgs.zstd
       cli
     ];
     text = ''

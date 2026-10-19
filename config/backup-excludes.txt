@@ -1,3 +1,5 @@
+# Leading / rules are relative to the backup source (Home by default); the
+# helper anchors them to its absolute path before invoking Restic.
 # Home-relative paths: sources, Git history, credentials, saves and application
 # state are included. These patterns affect backups, NEVER local build caches.
 /.snapshots
@@ -58,3 +60,7 @@
 **/GrShaderCache
 **/DawnCache
 # No broad 'build', 'dist', 'bin', 'obj' exclusions: these can be real user data.
+
+# Retired Paperless raw database files remain locally for recovery. The verified,
+# owner-readable archive in .local/share/weasel-retired-services IS backed up.
+/source/system/services/docker/paperless-ngx
