@@ -9,6 +9,8 @@ import qs.Modules.Plugins
 PluginComponent {
     id: root
 
+    pillRightClickAction: () => root.toggleQuickAction()
+
     property string connectionName: "Sophos VPN"
     property string profilePath: ""
     property string username: "tobias.wehrle"
@@ -354,13 +356,6 @@ PluginComponent {
                 font.weight: Font.Medium
                 color: root.statusColor()
                 anchors.verticalCenter: parent.verticalCenter
-            }
-
-            MouseArea {
-                anchors.fill: parent
-                acceptedButtons: Qt.RightButton
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.toggleQuickAction()
             }
         }
     }

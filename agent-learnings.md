@@ -1435,3 +1435,7 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 
 - Updated existing configured sources: flake.lock, packages/netbird-bin.nix, packages/netbird-ui-bin.nix, packages/t3code/source.json, packages/tuios-bin.nix, profiles/system/laptop.nix.
 - Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
+
+## 2026-10-20 — Sophos VPN bar widget layout
+- Removed an `anchors.fill: parent` MouseArea from the horizontal Row; Qt disables Row positioning for such children and reports zero implicit width, collapsing the pill around its icon/text. Route the existing quick action through PluginComponent.pillRightClickAction instead.
+- Verification: offscreen Quickshell reproducer reports old implicitWidth=0 and fixed implicitWidth=73.4375; affected-client drvPath evaluations (nixy-laptop, nixy-desktop, michapc, michapc-debug), git diff --check, and laptop build dry-run. The laptop drvPath matches the running system; this out-of-store QML change needs no new system compilation. Physical desktop capture remains paused.
