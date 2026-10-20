@@ -100,7 +100,24 @@
       pkgsUnstable.dgop
       pkgsUnstable.dsearch
       inputs.helium.packages.${pkgs.stdenv.hostPlatform.system}.default
-      inputs.zen-browser.packages.${pkgs.stdenv.hostPlatform.system}.default
+      (
+        let
+          zen = inputs.zen-browser.packages.${pkgs.stdenv.hostPlatform.system};
+        in
+        if
+          pkgs.stdenv.hostPlatform.system == "x86_64-linux" && zen.zen-browser-unwrapped.version == "1.23.3b"
+        then
+          # The upstream flake checksum differs from the official release asset digest.
+          # https://github.com/zen-browser/desktop/releases/tag/1.23.3b
+          zen.default.override {
+            zen-browser-unwrapped = zen.zen-browser-unwrapped.override {
+              url = "https://github.com/zen-browser/desktop/releases/download/1.23.3b/zen.linux-x86_64.tar.xz";
+              hash = "sha256-uyBF0+IWVNQP6EElAJLurf0sH8gx7vtQkiJ3PIvcoUk=";
+            };
+          }
+        else
+          zen.default
+      )
       inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.t3code
       (import ../../packages/handy {
         handy = inputs.handy;
