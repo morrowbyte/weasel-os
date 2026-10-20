@@ -7,6 +7,8 @@ ulimit -S -c 0 2>/dev/null || true
 CONNECTION_NAME=${SOPHOS_VPN_CONNECTION_NAME:-Sophos VPN}
 SECRET_SERVICE=${SOPHOS_VPN_SECRET_SERVICE:-sophos-vpn}
 SECRET_ACCOUNT=${SOPHOS_VPN_SECRET_ACCOUNT:-default}
+OPENVPN_ONLY=${SOPHOS_VPN_OPENVPN_ONLY:-0}
+USE_TOTP=${SOPHOS_VPN_USE_TOTP:-1}
 DEFAULT_IMPORT_USERNAME=${SOPHOS_VPN_USERNAME:-}
 NMCLI_BIN=${NMCLI_BIN:-nmcli}
 SECRET_TOOL_BIN=${SECRET_TOOL_BIN:-secret-tool}
@@ -35,9 +37,12 @@ Usage:
   sophos-vpn bridge-disconnect
   sophos-vpn import <profile.ovpn> [--name <connection-name>] [--username <vpn-username>]
   sophos-vpn store-password
+  sophos-vpn configure <username>
 
 Notes:
   - connect reads the 6-digit TOTP from stdin when stdin is not a TTY.
+  - SOPHOS_VPN_USE_TOTP=0 connects with the password only.
+  - SOPHOS_VPN_OPENVPN_ONLY=1 disables legacy bridge and streaming checks.
   - otherwise connect prompts on /dev/tty without echo.
   - the base password lives in Secret Service under:
       service=sophos-vpn account=default kind=base-password
@@ -55,6 +60,18 @@ json_status() {
   local device=$4
   local ip4=$5
   local message=$6
+  if [[ $OPENVPN_ONLY == 1 ]]; then
+    local vpn_username
+    vpn_username=$("$NMCLI_BIN" -g vpn.user-name connection show id "$CONNECTION_NAME" 2>/dev/null || true)
+    # shellcheck disable=SC2016
+    json_output --arg connection "$CONNECTION_NAME" --arg state "$state" \
+      --arg device "$device" --arg ip4 "$ip4" --arg message "$message" \
+      --arg username "$vpn_username" --argjson connected "$connected" --argjson has_secret "$has_secret" \
+      '{ok:($state != "error"), connection:$connection, state:$state, connected:$connected,
+        vpn_connected:$connected, device:$device, ip4:$ip4, username:$username,
+        has_base_password:$has_secret, message:$message}'
+    return
+  fi
   local bar_text detail_text severity
   local bridge_connected=false
   local bridge_managed=false
@@ -229,7 +246,13 @@ require_bins() {
 }
 
 secret_lookup() {
-  "$SECRET_TOOL_BIN" lookup service "$SECRET_SERVICE" account "$SECRET_ACCOUNT" kind base-password 2>/dev/null || true
+  local secret
+  secret=$("$SECRET_TOOL_BIN" lookup service "$SECRET_SERVICE" account "$SECRET_ACCOUNT" kind base-password 2>/dev/null || true)
+  # Retain the existing Sophos credential without sharing it with other profiles.
+  if [[ -z $secret && $SECRET_ACCOUNT == "connection:Sophos VPN" ]]; then
+    secret=$("$SECRET_TOOL_BIN" lookup service "$SECRET_SERVICE" account default kind base-password 2>/dev/null || true)
+  fi
+  printf '%s' "$secret"
 }
 
 has_secret() {
@@ -361,6 +384,18 @@ store_password() {
   return 1
 }
 
+configure_vpn() {
+  if ! ensure_connection_exists; then
+    json_error configure "Verbindung nicht gefunden. Bitte ein OpenVPN-Profil importieren."
+    return 1
+  fi
+  if ! "$NMCLI_BIN" connection modify id "$CONNECTION_NAME" vpn.user-name "${1:-}" >/dev/null 2>&1; then
+    json_error configure "Benutzername konnte nicht gespeichert werden."
+    return 1
+  fi
+  json_output '{ok:true, action:"configure"}'
+}
+
 connect_vpn() {
   local base_password totp combined
   local tmpdir passwd_file stderr_file
@@ -377,17 +412,20 @@ connect_vpn() {
     return 1
   fi
 
-  totp=$(read_hidden_line "TOTP (6 digits): ")
-  if [[ ! $totp =~ ^[0-9]{6}$ ]]; then
-    json_error connect "TOTP must be exactly 6 digits"
-    return 1
+  totp=
+  if [[ $USE_TOTP == 1 ]]; then
+    totp=$(read_hidden_line "TOTP (6 digits): ")
+    if [[ ! $totp =~ ^[0-9]{6}$ ]]; then
+      json_error connect "TOTP must be exactly 6 digits"
+      return 1
+    fi
   fi
 
-  if bridge_listener_active && ! bridge_managed_active; then
+  if [[ $OPENVPN_ONLY != 1 ]] && bridge_listener_active && ! bridge_managed_active; then
     json_error connect "RDP bridge is active outside the plugin; stop its ssh command first"
     return 1
   fi
-  if bridge_managed_active; then
+  if [[ $OPENVPN_ONLY != 1 ]] && bridge_managed_active; then
     bridge_was_active=true
     if ! stop_managed_bridge; then
       json_error connect "failed to stop RDP bridge"
@@ -521,6 +559,11 @@ import_profile() {
     esac
   done
 
+  if [[ $OPENVPN_ONLY == 1 ]] && "$NMCLI_BIN" -g connection.type connection show id "$import_name" >/dev/null 2>&1; then
+    json_error import "Verbindungsname bereits vorhanden. Für einen neuen Import einen anderen Namen wählen."
+    return 1
+  fi
+
   tmpdir=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/sophos-vpn-import.XXXXXX")
   before_file=$tmpdir/before
   after_file=$tmpdir/after
@@ -558,7 +601,11 @@ import_profile() {
     return 1
   fi
 
-  "$NMCLI_BIN" connection modify uuid "$new_uuid" connection.id "$import_name" connection.autoconnect no ipv4.never-default yes ipv6.never-default yes >/dev/null
+  if [[ $OPENVPN_ONLY == 1 ]]; then
+    "$NMCLI_BIN" connection modify uuid "$new_uuid" connection.id "$import_name" connection.autoconnect no >/dev/null
+  else
+    "$NMCLI_BIN" connection modify uuid "$new_uuid" connection.id "$import_name" connection.autoconnect no ipv4.never-default yes ipv6.never-default yes >/dev/null
+  fi
   if [[ -n $import_username ]]; then
     "$NMCLI_BIN" connection modify id "$import_name" vpn.user-name "$import_username" >/dev/null
   fi
@@ -586,6 +633,10 @@ main() {
     status)
       shift
       print_status
+      ;;
+    configure)
+      shift
+      configure_vpn "$@"
       ;;
     connect)
       shift

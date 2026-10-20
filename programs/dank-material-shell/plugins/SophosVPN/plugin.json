@@ -1,8 +1,8 @@
 {
   "id": "sophosVpn",
-  "name": "Blain Remote Access",
-  "description": "Sophos OpenVPN, RDP-only SSH bridge, and direct Moonlight/Sunshine readiness",
-  "version": "1.2.0",
+  "name": "OpenVPN",
+  "description": "OpenVPN connections with optional TOTP",
+  "version": "2.0.0",
   "license": "MIT",
   "author": "Codex",
   "icon": "vpn_lock",
