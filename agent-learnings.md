@@ -1444,3 +1444,8 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 - Replaced the remote-access popup with a 320px OpenVPN-only connection/setup UI using DMS theme tokens. Removed bridge/streaming UI and duplicated status/help copy; kept the installed plugin ID for migration. Profile, username and optional TOTP persist per connection; password values stay out of plugin settings.
 - Added a helper mode without legacy probes, optional TOTP, per-connection password accounts with a narrowly scoped existing Sophos credential fallback, and username updates. Generic imports preserve the profile's default-route policy and reject duplicate connection names.
 - Verification: shellcheck/bash syntax, existing import/bridge regressions and test-openvpn-connect.sh; all four client drvPath evaluations; laptop build (only helper and system aggregation derivations). Actual QML rendered offscreen with real DMS components/theme and a stubbed window host/helper: dark/light setup, no-TOTP and long names at 240px, no horizontal overflow. Native fixture windows need sufficient fixed height for screenshots; their offscreen platform does not resize after an implicitHeight change. Physical desktop capture remains paused; live shell reload/status are separate activation checks.
+
+### 2026-10-21 — batch candidate 20261021T100510Z-73924c6c
+
+- Updated existing configured sources: flake.lock, flake.nix, packages/chatgpt/default.nix, packages/proton-pass-cli.nix, packages/t3code/source.json.
+- Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.

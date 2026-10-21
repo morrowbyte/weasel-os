@@ -9,7 +9,7 @@
     };
     nixpkgs-unstable.url = "github:nixos/nixpkgs/nixos-unstable";
     serena = {
-      url = "github:oraios/serena/949a27ef1e5fda1a6e7b561e777bcece345c6ffd";
+      url = "github:oraios/serena/5e4f5cd173c7ff3eed37ee3f1de6c266b937c5dc";
       inputs.nixpkgs.follows = "nixpkgs-unstable";
     };
     nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
@@ -51,7 +51,7 @@
       url = "path:./packages/t3code";
       inputs.nixpkgs.follows = "nixpkgs-unstable";
     };
-    hermes-agent.url = "github:NousResearch/hermes-agent/v0.21.7";
+    hermes-agent.url = "github:NousResearch/hermes-agent/v0.22.2";
     handy-nixpkgs.url = "github:NixOS/nixpkgs/46db2e09e1d3f113a13c0d7b81e2f221c63b8ce9";
     handy = {
       # Pin to the immutable upstream v0.9.6 release with its matching nixpkgs snapshot
