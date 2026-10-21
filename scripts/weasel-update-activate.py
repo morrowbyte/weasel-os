@@ -899,7 +899,10 @@ def prune_owned(runner, state, keep=3):
             continue
         numbers = [number for number, owner in snapshots.items() if owner == run.name]
         if successful and (not isinstance(record.get("snapshot"), int) or numbers != [record["snapshot"]]):
-            raise ActivationError("Refusing cleanup of an untagged Home snapshot")
+            # The user may have deleted old snapshots or changed their ownership.
+            # Leave this old run untouched; housekeeping is not an update prerequisite.
+            kept.append(run.name)
+            continue
         # Snapshot deletion and every directory deletion are confined to tagged artifacts.
         # A power loss midway leaves an unresolved durable cleanup transaction.
         record["phase"] = "pruning"

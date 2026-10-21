@@ -1449,3 +1449,8 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 
 - Updated existing configured sources: flake.lock, flake.nix, packages/chatgpt/default.nix, packages/proton-pass-cli.nix, packages/t3code/source.json.
 - Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
+
+### 2026-10-21 — User-deleted snapshots must not veto updates
+
+- Retention now defers an old completed run when its snapshot is missing or no longer matches ownership, without changing journals/backups or deleting foreign snapshots. Explicit user snapshot deletion had made housekeeping veto an otherwise qualified daily update. Actual unresolved transaction checks remain separate.
+- Verification: `python3 tests/test-update-activation.py` (47 tests, one pre-existing skip), `git diff --check`; regression covers missing, foreign-owned and mismatched snapshot numbers and unchanged original bytes. Exact combined helper/system build and protected bootstrap activation are recorded separately.

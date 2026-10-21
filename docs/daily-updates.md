@@ -237,8 +237,11 @@ wird sicher wiederverwendet; veränderte Archive und Symlinks werden abgewiesen.
 Der Updater begrenzt ausschließlich seine markierten aufgelösten Kandidaten
 und abgeschlossenen Transaktionen auf drei. Geänderte Originale, offene
 Dateideskriptoren und ungeklärte Transaktionen werden erhalten. Gelöscht werden
-nur eindeutig zugeordnete Updater-Snapshots und eigene Artefakte. Persönliche
-Daten, Spiele, Modelle, VM-Disks und fremde Worktrees sind keine Cleanup-Ziele.
+nur eindeutig zugeordnete Updater-Snapshots und eigene Artefakte. Wurde ein alter
+Snapshot ausdrücklich gelöscht oder lässt er sich nicht mehr eindeutig zuordnen,
+bleibt die zugehörige alte Transaktion bei der Bereinigung unverändert erhalten.
+Das blockiert kein neues Update. Persönliche Daten, Spiele, Modelle, VM-Disks
+und fremde Worktrees sind keine Cleanup-Ziele.
 Ein Stromausfall während Cleanup hinterlässt ebenfalls einen Recoveryfall.
 
 ## Einmaliger Bootstrap

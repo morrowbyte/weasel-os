@@ -779,7 +779,7 @@ for private in [run, run / 'journal.json', workspace]:
         self.assertEqual(json.loads(journal.read_bytes())["phase"], "recovery-required")
         self.assertEqual((backup / "original").read_bytes(), b"late editor save")
 
-    def test_retention_never_deletes_an_untagged_snapshot(self):
+    def test_retention_defers_untagged_or_user_deleted_snapshot_without_blocking(self):
         state, backups = self.root / "state", self.root / "backups"
         (state / "runs").mkdir(parents=True)
         (state / "requests").mkdir()
@@ -795,17 +795,26 @@ for private in [run, run / 'journal.json', workspace]:
                 "marker": activation.OWNER_TAG, "id": identifier, "phase": "complete", "snapshot": serial + 1,
                 "retained_originals": {"original": activation.digest(b"old")},
                 "original_index_sha256": activation.digest(b"index")}))
+        originals = {path: path.read_bytes() for parent in (state, backups)
+                     for path in parent.rglob("*") if path.is_file()}
         class SnapshotReader:
             account = types.SimpleNamespace(pw_uid=os.getuid())
+            def __init__(self, rows):
+                self.rows = rows
             def root(self, name, args):
                 if name == "snapper" and "list" in args:
-                    return b'{"home":[{"number":1,"userdata":{"other-owner":"yes"}}]}'
+                    return activation.encoded({"home": self.rows})
                 raise AssertionError("Deletion must not execute")
-        with patch.object(activation, "BACKUPS", backups), patch.object(activation, "retained_has_open_fds", return_value=False):
-            with self.assertRaisesRegex(activation.ActivationError, "untagged"):
-                activation.prune_owned(SnapshotReader(), state, keep=3)
-        self.assertEqual(len(list((state / "runs").iterdir())), 4)
-        self.assertEqual(len(list(backups.iterdir())), 4)
+        for rows in ([], [{"number": 1, "userdata": {"other-owner": "yes"}}],
+                     [{"number": 7, "userdata": {"weasel-daily-update": "yes",
+                       "weasel-update-id": "20261008T140000Z-00000000"}}]):
+            with self.subTest(rows=rows), patch.object(activation, "BACKUPS", backups), patch.object(activation, "retained_has_open_fds", return_value=False):
+                self.assertEqual(activation.prune_owned(SnapshotReader(rows), state, keep=3),
+                                 ["20261008T140000Z-00000000"])
+            self.assertEqual({path: path.read_bytes() for parent in (state, backups)
+                              for path in parent.rglob("*") if path.is_file()}, originals)
+            self.assertEqual(len(list((state / "runs").iterdir())), 4)
+            self.assertEqual(len(list(backups.iterdir())), 4)
 
 
     def test_corrupted_git_blob_cannot_replace_signed_content(self):
