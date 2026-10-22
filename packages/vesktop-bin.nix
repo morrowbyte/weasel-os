@@ -13,11 +13,11 @@
 
 let
   pname = "vesktop";
-  version = "1.6.7";
+  version = "1.6.8";
 
   src = fetchurl {
     url = "https://github.com/Vencord/Vesktop/releases/download/v${version}/Vesktop-${version}.AppImage";
-    hash = "sha256-hVYytou6pyTXbp89neqwQQER9dlbedo88CTOtU9ObYE=";
+    hash = "sha256-F1dCbZN6aYeuQwbnT6wv5tPE69SoiVzjrWxu585hDYQ=";
   };
 
   appimageContents = appimageTools.extractType2 {
@@ -71,7 +71,7 @@ let
     '';
   };
 
-  # Vesktop 1.6.7 asks its renderer to open a second, custom picker after
+  # Vesktop 1.6.8 asks its renderer to open a second, custom picker after
   # xdg-desktop-portal has already selected a Wayland source.  When that
   # renderer command rejects, the error is swallowed and Electron receives an
   # empty capture result.  Keep the working portal source and hand it directly
@@ -92,7 +92,12 @@ let
 
         mkdir app
         asar extract "$out/resources/app.asar" app
-        node ${../scripts/patch-vesktop-wayland-capture.mjs} app/dist/js/main.js
+        # The 1.6.8 bundle only renames this handler's Wayland flag (vy -> Iy).
+        # Retain the existing exact-one-match patch and the same capture behavior.
+        substitute ${../scripts/patch-vesktop-wayland-capture.mjs} patch-vesktop-wayland-capture.mjs \
+          --replace-fail 'if(vy){let c=i[0];' 'if(Iy){let c=i[0];' \
+          --replace-fail 'Vesktop 1.6.7' 'Vesktop 1.6.8'
+        node patch-vesktop-wayland-capture.mjs app/dist/js/main.js
 
         rm -f "$out/resources/app.asar"
         rm -rf "$out/resources/app.asar.unpacked"
@@ -110,7 +115,7 @@ appimageTools.wrapAppImage {
       ${patchedAppimageContents}/vesktop.desktop \
       "$out/share/applications/vesktop.desktop"
     substituteInPlace "$out/share/applications/vesktop.desktop" \
-      --replace-fail 'Exec=AppRun --no-sandbox %U' 'Exec=vesktop %U'
+      --replace-fail 'Exec=AppRun %U' 'Exec=vesktop %U'
 
     cp -r ${patchedAppimageContents}/usr/share/icons "$out/share/"
 
