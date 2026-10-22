@@ -56,13 +56,35 @@ and the exact `parallel-cli search` or `parallel-cli extract` prefix). Validate
 the saved JSON receipt. Preserve working OAuth; do not copy API keys, loosen
 global sandboxing, add credits, or create monitors automatically.
 
-For the current morrowbyte projects, use Blacksmith GitHub Actions runners
-(`blacksmith-8vcpu-ubuntu-2404` by default) for compilation, packaging and full
-test suites. The owner's 2026-10-15 migration supersedes Namespace-only guidance
-for these projects. Preserve documented platform exceptions and historical
-source-only provenance workflows. Other projects retain their existing backend.
-Do not move build pressure back to the laptop or Hephaestus. Local read-only
-inspection and bounded syntax checks are allowed. Main GitHub identity is
+Owner override 2026-10-22: choose the compilation/CI execution location once per
+project and calendar day in Europe/Berlin. This supersedes older fixed-location
+instructions, including Blacksmith-only and nightly-workflow build-location rules.
+At the first development task of a new day, before compilation or CI, ask only
+whether to run locally or on Blacksmith, unless the user already chose explicitly.
+Read-only questions and lightweight inspection do not need this question.
+Store the answer in `agent-build-location.json` inside the absolute Git common
+directory from `git rev-parse --path-format=absolute --git-common-dir`. All worktrees
+and threads of that repository share this file. Its shape is version=1, timezone=
+Europe/Berlin, and decisions mapping YYYY-MM-DD to a record with mode=local or
+blacksmith, selectedAt as an ISO timestamp, and source=user. Preserve other dates.
+Use an exclusive file lock and atomic replacement for every registry change.
+Before asking, atomically reserve a top-level pending record with date,
+ownerThreadId and askedAt under that same lock. Other agents read the reservation
+and reuse the owning thread's question instead of asking concurrently. Replace
+pending with the dated decision only after the user's answer; never infer an
+answer from elapsed time or replace a live reservation. A stopped/deleted owner
+may be handed off after verifying its state. Reuse today's
+answer without asking again, and replace it only when the user changes it. A task
+keeps its selection while it runs; the next day's first new task asks again.
+Local means the task's current host; do not silently move work to another host.
+For non-Git projects, keep the same record under the canonical project root's
+private agent metadata. Missing or stale records require a choice, not a fallback.
+Blacksmith uses `blacksmith-8vcpu-ubuntu-2404` by default for current morrowbyte
+projects. Preserve platform exceptions, resource checks, explicit no-build/source-
+only tasks, and paused work. A daily choice does not authorize releases, installs,
+full suites for every edit, or disabling repository-required GitHub checks. Reuse
+successful evidence; do not rerun checks merely to change their execution location.
+Main GitHub identity is
 EvilWeasel; current shared project organization is morrowbyte. Preserve private
 repositories and existing credentials. Use Fast/priority service tier when
 available; preserve the selected model. Configure Codex PR code reviews through
