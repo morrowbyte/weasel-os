@@ -1470,3 +1470,10 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 
 - Updated existing configured sources: flake.lock, flake.nix, packages/t3code/source.json.
 - Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
+
+### 2026-10-23 — Claude Desktop on nixy-laptop
+
+- Added the community `tomsch/claude-desktop-nix` flake, pinned to f4bf2aa8363be2ce8c2adce449b04ef6281e91ae and following existing nixpkgs. It repackages Anthropic's official Linux beta 3.6556.2; only the laptop Home Manager package list changes. Claude Code was already installed (2.1.223).
+- Verification: syntax parsing of both edited Nix files; laptop toplevel drvPath evaluation; `nix flake check --no-build --no-write-lock-file`; dry-run dependency inspection and exact evaluated host drv build (exit 0). Switched the built system under `/var/lib/weasel-updates/activation.lock`; active system and system profile independently matched. No failed system units.
+- Live check: launched installed `claude-desktop` in a retained user service; actual Niri window com.anthropic.Claude showed the welcome screen and Get started button. Login and Cowork remain untested. The computer-use indicator reported capability unavailable; no mouse/keyboard automation was attempted. Read-only desktop observation verified startup.
+- Evidence: task-local logs in `~/.cache/claude-desktop-install-20261023/` (not guaranteed after cleanup). Preserve unrelated lock nodes: adding the input caused Nix to rename/reorder nodes, so retained the original nodes and added only the new input.

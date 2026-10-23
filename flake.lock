@@ -865,7 +865,8 @@
         "serena": "serena",
         "sops-nix": "sops-nix",
         "t3code": "t3code",
-        "zen-browser": "zen-browser"
+        "zen-browser": "zen-browser",
+        "claude-desktop": "claude-desktop"
       }
     },
     "serena": {
@@ -1151,6 +1152,26 @@
       "original": {
         "owner": "openclaw",
         "repo": "nix-steipete-tools",
+        "type": "github"
+      }
+    },
+    "claude-desktop": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1792753211,
+        "narHash": "sha256-oT6A8HssjMHwNZ209vjSImQOn4SRRfIsjx21ajpAlig=",
+        "owner": "tomsch",
+        "repo": "claude-desktop-nix",
+        "rev": "f4bf2aa8363be2ce8c2adce449b04ef6281e91ae",
+        "type": "github"
+      },
+      "original": {
+        "owner": "tomsch",
+        "repo": "claude-desktop-nix",
         "type": "github"
       }
     }

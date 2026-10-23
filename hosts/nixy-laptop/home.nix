@@ -58,6 +58,7 @@ in
   ];
 
   home.packages = [
+    inputs.claude-desktop.packages.${pkgs.stdenv.hostPlatform.system}.default
     hermesDesktop
     cuaDriver
     laptopExecutor
