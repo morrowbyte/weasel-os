@@ -51,7 +51,7 @@
       url = "path:./packages/t3code";
       inputs.nixpkgs.follows = "nixpkgs-unstable";
     };
-    hermes-agent.url = "github:NousResearch/hermes-agent/v0.22.4";
+    hermes-agent.url = "github:NousResearch/hermes-agent/v0.22.5";
     handy-nixpkgs.url = "github:NixOS/nixpkgs/46db2e09e1d3f113a13c0d7b81e2f221c63b8ce9";
     handy = {
       # Pin to the immutable upstream v0.9.6 release with its matching nixpkgs snapshot

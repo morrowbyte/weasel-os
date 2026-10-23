@@ -1465,3 +1465,8 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 - Route only RemoteDesktop to Luminous on nixy-laptop; GNOME advertises no RemoteDesktop backend under Niri. The pinned Luminous 0.1.21 lacks the newer upstream input-consent dialog, so a focused package patch requires session-only consent and rejects cancellation, timeout or dialog failure. Keyboard-only sessions skip the unrelated monitor picker. Preserve the shared monitor helper signature used by InputCapture.
 - Bound Cargo jobs to NIX_BUILD_CORES: upstream's Meson command otherwise ignores the requested build parallelism. Today the owner selected local builds; cached dependencies and four Cargo jobs were used.
 - Verification: Nix syntax parsing, nixy-laptop drvPath evaluation, flake check --no-build --no-write-lock-file, corrected patched package and exact host drv build; activation under the updater lock after checking completed journals. Running RemoteDesktop AvailableDeviceTypes changed from 0 to 7; the permission helper times out with exit 70. Full Proton Pass autotype acceptance remains pending owner unlock of the PIN-locked app; no genuine credentials were typed, and the temporary dummy vault item was deleted.
+
+### 2026-10-23 — batch candidate 20261023T100608Z-723c7988
+
+- Updated existing configured sources: flake.lock, flake.nix, packages/t3code/source.json.
+- Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
