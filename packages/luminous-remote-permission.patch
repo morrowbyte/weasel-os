@@ -1,0 +1,56 @@
+--- a/src/remotedesktop.rs
++++ b/src/remotedesktop.rs
+@@ -380,6 +380,26 @@
+                 },
+             )
+             .await?;
++        // This release predates upstream's RemoteDesktop permission dialog.
++        // Reject failures, cancellation and timeout; consent is session-only.
++        let permission = tokio::process::Command::new("@permissionDialog@")
++            .args([
++                "--question",
++                "--title=Desktop input permission",
++                "--no-markup",
++                "--button=Cancel:1",
++                "--button=Allow once:0",
++                "--response=1",
++                "--timeout=60",
++            ])
++            .arg(format!("--text=Allow '{}' to control the keyboard and pointer for this session?", app_id))
++            .kill_on_drop(true)
++            .status()
++            .await
++            .map_err(|_| zbus::fdo::Error::Failed("Input permission dialog unavailable".into()))?;
++        if !permission.success() {
++            return Ok(PortalResponse::Cancelled);
++        }
+         let current_session = Session::new(session_handle.clone(), SessionType::Remote);
+         append_session(current_session.clone()).await;
+         server.at(session_handle.clone(), current_session).await?;
+@@ -457,7 +477,25 @@
+             x,
+             y,
+             wl_output,
+-        } = get_monitor_info_from_socket(&connection)?;
++        } = if !screen_share_enabled
++            && device_type == BitFlags::from_flag(DeviceType::Keyboard)
++        {
++            // Keyboard-only sessions need no monitor coordinates or picker.
++            let outputs = connection.get_all_outputs();
++            let output = outputs.first().ok_or_else(|| {
++                zbus::fdo::Error::Failed("No Wayland output available".into())
++            })?;
++            let libwayshot::Size { width, height } = space_size(&connection);
++            RemoteInfo {
++                x: 0,
++                y: 0,
++                width,
++                height,
++                wl_output: output.wl_output.clone(),
++            }
++        } else {
++            get_monitor_info_from_socket(&connection)?
++        };
+         if screen_share_enabled {
+             let show_cursor = current_session.cursor_mode.show_cursor();
+ 

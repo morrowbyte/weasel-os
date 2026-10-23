@@ -16,10 +16,13 @@
   xdg.portal = {
     enable = true;
     xdgOpenUsePortal = true;
-    extraPortals = with pkgs; [
-      xdg-desktop-portal-gnome
-      xdg-desktop-portal-gtk
-    ];
+    extraPortals = [
+      pkgs.xdg-desktop-portal-gnome
+      pkgs.xdg-desktop-portal-gtk
+    ]
+    ++ lib.optional (host == "nixy-laptop") (
+      import ../../packages/xdg-desktop-portal-luminous.nix { inherit pkgs pkgsUnstable; }
+    );
     config.niri = {
       default = [
         "gnome"
@@ -27,6 +30,9 @@
       ];
       "org.freedesktop.impl.portal.Access" = [ "gtk" ];
       "org.freedesktop.impl.portal.Notification" = [ "gtk" ];
+      # GNOME's RemoteDesktop backend requires Mutter; Luminous uses Niri's
+      # virtual input protocols and asks permission before enabling autotype.
+      "org.freedesktop.impl.portal.RemoteDesktop" = lib.mkIf (host == "nixy-laptop") [ "luminous" ];
       "org.freedesktop.impl.portal.ScreenCast" = [ "gnome" ];
       "org.freedesktop.impl.portal.Screenshot" = [ "gnome" ];
       "org.freedesktop.impl.portal.Secret" = [ "gnome-keyring" ];
