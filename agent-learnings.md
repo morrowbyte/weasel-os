@@ -1479,3 +1479,8 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 - Evidence: task-local logs in `~/.cache/claude-desktop-install-20261023/` (not guaranteed after cleanup). Preserve unrelated lock nodes: adding the input caused Nix to rename/reorder nodes, so retained the original nodes and added only the new input.
 
 - The first Claude launch registered `x-scheme-handler/claude` through the existing out-of-store MIME configuration. Retain both associations so browser login callbacks reach the desktop app; final host evaluation checks that this mutable registration does not change the built host derivation.
+
+### 2026-10-24 — batch candidate 20261024T165635Z-0387ab54
+
+- Updated existing configured sources: flake.lock, packages/chatgpt/default.nix, packages/t3code/source.json.
+- Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
