@@ -17,11 +17,11 @@
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "netbird-ui-bin";
-  version = "0.81.4";
+  version = "0.81.5";
 
   src = fetchurl {
     url = "https://github.com/netbirdio/netbird/releases/download/v${finalAttrs.version}/netbird-ui_${finalAttrs.version}_linux_amd64.rpm";
-    hash = "sha256-QBE7gUWZ56Ke58MdTG4TeQYAGyqUI6gdEnA+ldX6MMA=";
+    hash = "sha256-Lp1XngXtkuKoh3TH+xbXKffSRbl4MKfyt5Eu8vjleZQ=";
   };
 
   dontUnpack = true;
