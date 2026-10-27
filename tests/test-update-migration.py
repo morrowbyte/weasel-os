@@ -223,11 +223,14 @@ class GeneralSSHControlFlowTests(unittest.TestCase):
 
 
 class OrdinaryBatchFreshProofTests(unittest.TestCase):
-    def test_equal_original_raw_hash_still_calls_general_proof_on_all_hosts(self):
+    def test_ordinary_update_checks_only_laptop_and_reuses_fresh_raw_proof(self):
         from types import SimpleNamespace
         executor=lambda *args:b"owned-fixed-executor";events=[]
         def evaluate(expression):
-            return b"25.11" if ".config.system.nixos.release" in expression else b"a"*64
+            self.assertIn(".config.system.nixos.release", expression,
+                          "raw auth is already evaluated and rechecked by the general proof")
+            self.assertIn("nixosConfigurations.nixy-laptop", expression)
+            return b"25.11"
         def general(expression,before,after,host,evaluator,callback):
             self.assertIs(callback,executor);events.append(host)
             return {"old":"a"*64,"new":"a"*64,"ssh_effective":{"ok":True}}
@@ -236,8 +239,26 @@ class OrdinaryBatchFreshProofTests(unittest.TestCase):
         with patch.object(batch.importlib.util,"spec_from_file_location",return_value=spec), \
              patch.object(batch.importlib.util,"module_from_spec",return_value=adapter):
             result=batch.verify_sensitive_state("/tmp/old","/tmp/new",evaluate,mode="batch",migration_executor=executor)
-        self.assertEqual(events,batch.HOSTS);self.assertEqual(set(result["protected_ssh"]),set(batch.HOSTS))
+        self.assertEqual(events,["nixy-laptop"])
+        self.assertEqual(set(result["protected_ssh"]),{"nixy-laptop"})
         self.assertEqual(result["reviewed_migration_transitions"],{})
+
+    def test_host_scope_is_fixed_and_release_migration_remains_explicit(self):
+        self.assertEqual(batch.update_hosts("batch"), ["nixy-laptop"])
+        self.assertEqual(batch.update_hosts("release-migration"), batch.HOSTS)
+        with self.assertRaises(batch.BatchError):
+            batch.update_hosts("all")
+
+    def test_changed_or_invalid_fresh_auth_proof_is_rejected(self):
+        from types import SimpleNamespace
+        for after in ["b"*64, "invalid"]:
+            adapter=SimpleNamespace(verify_general=lambda *args: {"old":"a"*64,"new":after})
+            spec=SimpleNamespace(loader=SimpleNamespace(exec_module=lambda module:None))
+            with self.subTest(after=after), \
+                 patch.object(batch.importlib.util,"spec_from_file_location",return_value=spec), \
+                 patch.object(batch.importlib.util,"module_from_spec",return_value=adapter), \
+                 self.assertRaises(batch.BatchError):
+                batch.verify_sensitive_state("/tmp/old","/tmp/new",lambda expr:self.fail("must reject before release query"))
 
     def test_indirect_ssh_failure_blocks_equal_original_raw_hash(self):
         from types import SimpleNamespace

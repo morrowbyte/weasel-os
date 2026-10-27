@@ -141,8 +141,14 @@ werden nicht gekürzt. Auch die Übergänge nach Submit und beim späteren
 Abschluss verwenden dieselbe Ausgabe. Die nächste Kandidatenausgabe muss
 bereits vor Veröffentlichung der Anfrage in diese Grenze passen.
 
-Jeder Batch braucht Nix-Syntax, Evaluation aller vier Hosts, den vollständigen
-Flake-Check und den kompletten Laptop-Build. Seine Closure-Prüfung hält alle
+Ein normaler Laptop-Batch prüft und baut nur `nixy-laptop`; die anderen Hosts
+werden dabei nicht aktiviert und gehören nicht in seinen täglichen Prüfpfad.
+Die separate Release-Migration behält ihren Vier-Host-Vergleich. Nix-Syntax,
+Flake-Check und der komplette Laptop-Build bleiben erforderlich. Der frische
+SSH-Vergleich prüft die Authentifizierungsdaten bereits zweimal; seine Ergebnisse
+werden direkt verwendet statt dieselben Daten zusätzlich viermal auszuwerten.
+Die abschließenden vollständigen Quellmanifeste sichern beide Aufrufer weiterhin
+gegen Änderungen während der Prüfung ab. Die Closure-Prüfung hält alle
 hinzugefügten und entfernten Store-Artefakte mit vollständigen Inventar-Hashes
 fest; sie behauptet keine Gleichheit außerhalb dreier Apps. Die bisherigen
 aktiven Einzelpin-Lanes für T3/ChatGPT prüfen strukturell identische erzeugte Ausgaben außerhalb

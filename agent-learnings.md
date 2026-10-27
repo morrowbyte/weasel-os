@@ -1499,3 +1499,8 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 
 - Updated existing configured sources: flake.lock, packages/chatgpt/default.nix, packages/codex-acp.nix, packages/cua-driver-bin.nix, packages/netbird-bin.nix, packages/netbird-ui-bin.nix, packages/t3code/source.json, packages/tuios-bin.nix.
 - Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
+
+## 2026-10-27 — daily update target and duplicate policy evaluations
+- Ordinary preparation/activation now evaluate only nixy-laptop and reuse the fresh, rechecked raw authentication fingerprints from the existing SSH proof; release migrations retain all four hosts. Source/index/signature, SSH, snapshot, rollback and critical-app checks remain.
+- Verified focused migration/general/ordinary/callsite, semantic Nix, real-Git preparation and activation fixtures (95 passed, one existing skip); corrected the missing-cache fixture to fail the offline evaluator after the fixed SSH executor. AST parse and git diff --check passed.
+- Laptop evaluation `nix eval --no-write-lock-file .#nixosConfigurations.nixy-laptop.config.system.build.toplevel.drvPath` and direct evaluated `nix build DRV^* --max-jobs 1 --cores 2` passed; all existing application outputs reused.

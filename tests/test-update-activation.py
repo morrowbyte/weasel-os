@@ -386,6 +386,7 @@ class ActivationTests(unittest.TestCase):
         policy_calls = []
         class BatchPolicy:
             sensitive_eval_args = staticmethod(activation.import_peer("weasel-update-batch.py").sensitive_eval_args)
+            update_hosts = staticmethod(activation.import_peer("weasel-update-batch.py").update_hosts)
             @staticmethod
             def learning_suffix(identifier, mode, names):
                 self.assertEqual(identifier, request["id"])
@@ -560,7 +561,7 @@ class ActivationTests(unittest.TestCase):
             finally:
                 os.umask(previous_mask)
         hosts = [event[2] for event in events if event[0] == "eval" and event[1] == "candidate"]
-        self.assertEqual(hosts, ["nixosConfigurations." + host + ".config.system.build.toplevel.drvPath" for host in activation.BATCH_HOSTS])
+        self.assertEqual(hosts, ["nixosConfigurations.nixy-laptop.config.system.build.toplevel.drvPath"])
         self.assertLess(events.index(("flake-check",)), next(i for i, e in enumerate(events) if e[0] == "closure"))
         self.assertLess(events.index(("sensitive-state",)), events.index(("flake-check",)))
         self.assertLess(events.index(("published-pins",)), events.index(("flake-check",)))

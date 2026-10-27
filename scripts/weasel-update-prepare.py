@@ -598,7 +598,7 @@ def prepare_batch(repo, state, source, mode):
             if name.endswith('.nix'):
                 command(['nix-instantiate', '--parse', source / name])
         derivations = {}
-        for host in batch.HOSTS:
+        for host in batch.update_hosts(mode):
             attribute = f'nixosConfigurations.{host}.config.system.build.toplevel.drvPath'
             derivations[host] = command(['nix', 'eval', '--raw', '--no-write-lock-file', f'{source}#{attribute}']).decode().strip()
         sensitive = batch.verify_sensitive_state(repo, source, lambda expr: command(

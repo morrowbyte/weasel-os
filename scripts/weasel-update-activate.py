@@ -44,7 +44,6 @@ LANES = {
 REQUEST_KEYS = {"schema", "id", "baseline_commit", "baseline_system", "candidate_commit", "candidate_ref"}
 BATCH_REQUEST_KEYS = REQUEST_KEYS | {"mode"}
 BATCH_MODES = {"batch", "release-migration"}
-BATCH_HOSTS = [HOST, "nixy-desktop", "michapc", "michapc-debug"]
 ORIGIN_URL = "https://github.com/morrowbyte/weasel-os.git"
 OWNER_TAG = "weasel-daily-updates-v1"
 EXPECTED_PRIMARY_FINGERPRINT = "7D184861D38A4EA986C541FC9B2586DEDAFE5BEF"
@@ -1021,7 +1020,7 @@ def process_request(runner, request, state, repository, *, check_only=False):
         for name in changes:
             if name.endswith(".nix"):
                 runner.user("nix-instantiate", ["--parse", new_source / name])
-        affected_hosts = BATCH_HOSTS if batch_mode else ([HOST, "michapc", "michapc-debug"] if "t3" in metadata else [HOST])
+        affected_hosts = batch.update_hosts(request["mode"]) if batch_mode else ([HOST, "michapc", "michapc-debug"] if "t3" in metadata else [HOST])
         host_derivations = {}
         for host in affected_hosts:
             host_derivations[host] = nix_eval(runner, new_source, "nixosConfigurations." + host + ".config.system.build.toplevel.drvPath")

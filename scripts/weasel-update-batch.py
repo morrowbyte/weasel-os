@@ -525,6 +525,14 @@ def sensitive_expression(source, host):
             'builtins.hashString "sha256" (builtins.toJSON v)')
 
 
+def update_hosts(mode):
+    if mode == "batch":
+        return ["nixy-laptop"]
+    if mode == "release-migration":
+        return list(HOSTS)
+    raise BatchError("Unknown sensitive-state lane")
+
+
 def verify_sensitive_state(old_source, new_source, evaluator, *, mode="batch", migration_executor=None):
     checks, releases, transitions, ssh_proofs = {}, {}, {}, {}
     if mode not in {"batch", "release-migration"}:
@@ -532,9 +540,19 @@ def verify_sensitive_state(old_source, new_source, evaluator, *, mode="batch", m
     spec = importlib.util.spec_from_file_location("batch_migration", Path(__file__).with_name("weasel-update-migration.py"))
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
-    for host in HOSTS:
-        before = evaluator(sensitive_expression(old_source, host)).strip()
-        after = evaluator(sensitive_expression(new_source, host)).strip()
+    for host in update_hosts(mode):
+        # The ordinary SSH proof already evaluates and rechecks both raw
+        # authentication fingerprints. Reuse those fresh values.
+        if mode == "batch":
+            try:
+                transition = migration.verify_general(sensitive_expression, old_source, new_source,
+                                                      host, evaluator, migration_executor)
+            except RuntimeError as error:
+                raise BatchError("Protected authentication/SSH check failed: " + host + ": " + str(error)) from error
+            before, after = transition["old"], transition["new"]
+        else:
+            before = evaluator(sensitive_expression(old_source, host)).strip()
+            after = evaluator(sensitive_expression(new_source, host)).strip()
         if isinstance(before, bytes):
             before = before.decode()
         if isinstance(after, bytes):
@@ -543,26 +561,25 @@ def verify_sensitive_state(old_source, new_source, evaluator, *, mode="batch", m
             raise BatchError("Invalid authentication/stateVersion fingerprint: " + host)
         if mode == "batch" and before != after:
             raise BatchError("Batch changes evaluated authentication or stateVersion policy: " + host)
-        try:
-            verifier = migration.verify_general if mode == "batch" else migration.verify
-            transition = verifier(sensitive_expression, old_source, new_source, host, evaluator, migration_executor)
-        except RuntimeError as error:
-            raise BatchError("Protected authentication/SSH check failed: " + host + ": " + str(error)) from error
-        if transition["old"] != before or transition["new"] != after:
-            raise BatchError("Authentication policy changed during fresh SSH proof: " + host)
-        # Re-evaluate after building/parsing to reject source drift; the
-        # existing full-source manifest guards remain mandatory too.
-        again_before = evaluator(sensitive_expression(old_source, host)).strip()
-        if isinstance(again_before, bytes):
-            again_before = again_before.decode()
-        if again_before != before:
-            raise BatchError("Baseline authentication changed during SSH proof: " + host)
-        again = evaluator(sensitive_expression(new_source, host)).strip()
-        if isinstance(again, bytes):
-            again = again.decode()
-        if again != after:
-            raise BatchError("Candidate authentication changed during SSH proof: " + host)
         if mode == "release-migration":
+            try:
+                transition = migration.verify(sensitive_expression, old_source, new_source,
+                                              host, evaluator, migration_executor)
+            except RuntimeError as error:
+                raise BatchError("Protected authentication/SSH check failed: " + host + ": " + str(error)) from error
+            if transition["old"] != before or transition["new"] != after:
+                raise BatchError("Authentication policy changed during fresh SSH proof: " + host)
+            # Preserve the separate release migration's multi-host proof.
+            again_before = evaluator(sensitive_expression(old_source, host)).strip()
+            if isinstance(again_before, bytes):
+                again_before = again_before.decode()
+            if again_before != before:
+                raise BatchError("Baseline authentication changed during SSH proof: " + host)
+            again = evaluator(sensitive_expression(new_source, host)).strip()
+            if isinstance(again, bytes):
+                again = again.decode()
+            if again != after:
+                raise BatchError("Candidate authentication changed during SSH proof: " + host)
             transitions[host] = transition
         ssh_proofs[host] = transition
         checks[host] = before

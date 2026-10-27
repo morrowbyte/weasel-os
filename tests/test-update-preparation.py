@@ -466,12 +466,12 @@ class BatchPreparationTests(unittest.TestCase):
         calls = []
         def command(arguments, **kwargs):
             arguments = list(map(str, arguments))
-            if arguments[:2] == ['nix', 'eval'] and '--expr' in arguments:
+            if arguments[:2] == ['nix', 'eval'] and '--expr' in arguments and '--offline' in arguments:
                 calls.append(arguments)
                 raise p.Blocked('Missing cached IFD artifact')
             return self.command(arguments, **kwargs)
         with patch.object(p, 'command', side_effect=command):
-            with self.assertRaisesRegex(p.Blocked, 'Missing cached IFD artifact'):
+            with self.assertRaisesRegex(self.batch.BatchError, 'Missing cached IFD artifact'):
                 self.prepare()
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][1:-1], self.batch.sensitive_eval_args('ignored')[:-1])
@@ -620,7 +620,7 @@ class BatchPreparationTests(unittest.TestCase):
         self.assertTrue(record['published']['ok'])
         self.assertEqual(len(self.profile_checks), 1)
         self.assertTrue(record['app_tests']['codex']['profile_ownership']['ok'])
-        self.assertEqual(set(record['host_derivations']), set(self.batch.HOSTS))
+        self.assertEqual(set(record['host_derivations']), {'nixy-laptop'})
         self.assertEqual({kind for kind, *_ in self.probes}, {'t3', 'codex', 'chatgpt'})
         self.assertTrue(any(command[:3] == ['nix', 'flake', 'check'] for command in self.workloads))
         inbox = self.root / 'inbox' / 'request.json'
