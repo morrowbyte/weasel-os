@@ -37,6 +37,12 @@
   # Switching to dbus-broker requires a reboot and cannot be tested by a switch.
   services.dbus.implementation = "dbus";
 
+  # Release reverse-tunnel listeners when a VPN drop leaves a dead SSH client.
+  services.openssh.settings = {
+    ClientAliveInterval = 30;
+    ClientAliveCountMax = 3;
+  };
+
   # Keep the known boot path while migrating the release without a reboot.
   boot.initrd.systemd.enable = false;
 

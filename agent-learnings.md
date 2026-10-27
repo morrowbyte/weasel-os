@@ -1504,3 +1504,8 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 - Ordinary preparation/activation now evaluate only nixy-laptop and reuse the fresh, rechecked raw authentication fingerprints from the existing SSH proof; release migrations retain all four hosts. Source/index/signature, SSH, snapshot, rollback and critical-app checks remain.
 - Verified focused migration/general/ordinary/callsite, semantic Nix, real-Git preparation and activation fixtures (95 passed, one existing skip); corrected the missing-cache fixture to fail the offline evaluator after the fixed SSH executor. AST parse and git diff --check passed.
 - Laptop evaluation `nix eval --no-write-lock-file .#nixosConfigurations.nixy-laptop.config.system.build.toplevel.drvPath` and direct evaluated `nix build DRV^* --max-jobs 1 --cores 2` passed; all existing application outputs reused.
+
+## 2026-10-27 — SSH reverse-tunnel stale-session cleanup
+
+- Laptop-only OpenSSH ClientAliveInterval=30 and ClientAliveCountMax=3 release listeners held by an unresponsive client after approximately 90 seconds. Existing sessions keep their old settings until reconnected.
+- Verified Nix parse, affected laptop toplevel evaluation, direct evaluated build (max-jobs=1, cores=2), dry activation, serialized switch, sshd -t and active sshd -T values. Existing reverse listeners 4775/4776 and their session PID survived activation; no outage/reconnect simulation or Windows script change was performed.
