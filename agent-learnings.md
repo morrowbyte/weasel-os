@@ -1509,3 +1509,8 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 
 - Laptop-only OpenSSH ClientAliveInterval=30 and ClientAliveCountMax=3 release listeners held by an unresponsive client after approximately 90 seconds. Existing sessions keep their old settings until reconnected.
 - Verified Nix parse, affected laptop toplevel evaluation, direct evaluated build (max-jobs=1, cores=2), dry activation, serialized switch, sshd -t and active sshd -T values. Existing reverse listeners 4775/4776 and their session PID survived activation; no outage/reconnect simulation or Windows script change was performed.
+
+### 2026-10-28 — batch candidate 20261028T113200Z-cc84a94b
+
+- Updated existing configured sources: flake.lock, packages/chatgpt/default.nix, packages/t3code/source.json.
+- Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
