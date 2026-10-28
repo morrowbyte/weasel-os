@@ -142,6 +142,24 @@ class SafetyTests(unittest.TestCase):
                 self.assertIn('target-not-reached', command.call_args.args[0][-1])
                 self.assertTrue((root / '.local/state/weasel-storage-health/last-notice').exists())
 
+    def test_inventory_includes_morrowbyte_build_outputs_without_migrating(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            expected = []
+            for relative in ('.t3-morrowbyte/worktrees', '.t3-morrowbyte/scratch'):
+                project = home / relative / 'owned-project'
+                output = project / 'node_modules'
+                output.mkdir(parents=True)
+                (project / 'package.json').write_text('{}')
+                expected.append(str(output))
+            with patch.object(excludes, 'tracked', return_value=False), \
+                 patch.object(excludes, 'allocated', return_value=64 * 1024 ** 2), \
+                 patch.object(excludes, 'migrate') as migrate:
+                result = excludes.inventory(home)
+            self.assertEqual(sorted(item['path'] for item in result['candidates']), sorted(expected))
+            self.assertTrue(all(Path(path).is_dir() for path in expected))
+            migrate.assert_not_called()
+
     def test_migration_refuses_low_reserve_before_mutation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -224,6 +242,92 @@ class SafetyTests(unittest.TestCase):
             subprocess.run(['git', 'init', '-q', str(root)], check=True)
             subprocess.run(['git', '-C', str(root), 'add', 'target/.rustc_info.json'], check=True)
             self.assertTrue(excludes.tracked(root / 'target'))
+
+
+class AdmissionTests(unittest.TestCase):
+    def test_critical_metadata_and_data_errors_block_despite_apparent_free_space(self):
+        for sample in (row(unallocated=39), row(errors=1, unallocated=50), row(free=29, unallocated=50)):
+            with self.subTest(sample=sample), patch.object(health, 'measure', return_value=sample) as measured:
+                result = health.admission('/home')
+                self.assertFalse(result['allowed'])
+                self.assertIn('metadata', result['reason'])
+                measured.assert_called_once_with('/home', timeout=1)
+        with patch.object(health, 'measure', return_value=row(unallocated=40)):
+            self.assertTrue(health.admission('/home')['allowed'])
+
+    def test_only_allocating_commands_gate_including_wrappers_and_chains(self):
+        commands = (
+            'npm ci', 'pnpm test --run', 'bun install', 'cargo check', 'nix build .#x',
+            'python3 -m pip install foo', 'python3 tests/test-btrfs-reserve.py',
+            'git -C /project worktree add ../feature', '/usr/bin/git clone example',
+            'env CI=1 nice -n 19 timeout 30s /usr/bin/npm install',
+            "sudo -n bash -lc 'pnpm install'", 'rm -rf cache && npm ci',
+            'git status\nnpm test', 'if true; then cargo test; fi', 'nix --option sandbox false build .#x',
+            "npm install 'unterminated",
+        )
+        with patch.object(health, 'measure', return_value=row()):
+            for command in commands:
+                with self.subTest(command=command):
+                    result = health.codex_hook({'tool_name': 'Bash', 'tool_input': {'command': command}}, '/home')
+                    self.assertEqual(result['hookSpecificOutput']['permissionDecision'], 'deny')
+
+    def test_reads_cleanup_and_recovery_never_need_a_measurement(self):
+        commands = (
+            'git status --short', 'git diff', 'git worktree list', 'git worktree remove ../done',
+            'git clean -nd', "rg 'npm install' README.md", "printf '%s' 'cargo test'",
+            'rm -rf -- .cache/owned', 'find .cache/owned -type f -delete',
+            'pnpm store prune', 'npm cache clean --force', 'cargo clean -p build', 'make clean',
+            'pnpm --dir /project list', 'nix path-info build', 'nix profile remove test',
+            'nix store gc', 'nix-collect-garbage -d', 'sudo -n btrfs balance start -dusage=0 /',
+            'sudo systemctl restart crew.service', 'python3 scripts/weasel-btrfs-health.py check',
+            "bash -lc 'git status; rm -rf cache'", 'npm --version', 'nix path-info .#x',
+        )
+        with patch.object(health, 'measure', side_effect=AssertionError('must not measure reads')) as measured:
+            for command in commands:
+                with self.subTest(command=command):
+                    self.assertIsNone(health.codex_hook({'tool_name': 'Bash', 'tool_input': {'command': command}}, '/home'))
+            measured.assert_not_called()
+
+    def test_measurement_failure_and_non_btrfs_fail_closed_only_for_heavy_commands(self):
+        for error in (RuntimeError('Expected a mounted Btrfs filesystem'), OSError('sysfs unavailable'),
+                      subprocess.TimeoutExpired(['findmnt'], 1)):
+            with self.subTest(error=error), patch.object(health, 'measure', side_effect=error):
+                self.assertFalse(health.admission('/home')['allowed'])
+                self.assertIsNotNone(health.codex_hook({'tool_name': 'Bash', 'tool_input': {'command': 'npm ci'}}, '/home'))
+                self.assertIsNone(health.codex_hook({'tool_name': 'Bash', 'tool_input': {'command': 'rm -rf cache'}}, '/home'))
+        with patch.object(health, 'run', return_value='{"filesystems":[{"fstype":"ext4","uuid":"abc"}]}'):
+            with self.assertRaisesRegex(RuntimeError, 'Btrfs'):
+                health.measure('/home', timeout=1)
+
+    def test_cli_admit_exit_status_and_hook_denial_contract(self):
+        import io
+        import json
+        with patch.object(health, 'measure', return_value=row()):
+            with patch('sys.argv', ['health', 'admit']), patch('builtins.print') as output:
+                self.assertEqual(health.main(), 2)
+                self.assertFalse(json.loads(output.call_args.args[0])['allowed'])
+            event = {'tool_name': 'Bash', 'tool_input': {'command': 'npm ci'}}
+            with patch('sys.argv', ['health', 'codex-hook']), \
+                 patch.object(health.sys, 'stdin', io.StringIO(json.dumps(event))), \
+                 patch('builtins.print') as output:
+                self.assertEqual(health.main(), 0)
+                reply = json.loads(output.call_args.args[0])
+                self.assertEqual(reply['hookSpecificOutput']['hookEventName'], 'PreToolUse')
+                self.assertEqual(reply['hookSpecificOutput']['permissionDecision'], 'deny')
+
+    def test_other_tools_malformed_inputs_and_healthy_calls_do_not_override_approvals(self):
+        with patch.object(health, 'measure', return_value=row(unallocated=50)) as measured:
+            for tool, inputs in [('Bash', {'command': 'npm ci'}), ('exec_command', {'cmd': 'cargo test'}),
+                                 ('shell_command', {'command': 'git worktree add ../foo'})]:
+                self.assertIsNone(health.codex_hook({'tool_name': tool, 'tool_input': inputs}, '/home'))
+            self.assertEqual(measured.call_count, 3)
+        with patch.object(health, 'measure', side_effect=AssertionError('unrelated tool')) as measured:
+            for event in (None, {}, {'tool_name': 'Bash', 'tool_input': []},
+                          {'tool_name': 'Bash', 'tool_input': {'command': None}},
+                          {'tool_name': 'apply_patch', 'tool_input': {'command': 'npm ci'}},
+                          {'tool_name': 'functions.exec', 'tool_input': {'code': 'await tools.exec_command({cmd:"npm ci"})'}}):
+                self.assertIsNone(health.codex_hook(event, '/home'))
+            measured.assert_not_called()
 
 
 if __name__ == '__main__':

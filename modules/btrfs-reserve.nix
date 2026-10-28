@@ -1,5 +1,11 @@
-{ pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 let
+  toml = pkgs.formats.toml { };
   scripts = pkgs.linkFarm "weasel-storage-tools" [
     {
       name = "weasel-btrfs-health.py";
@@ -33,51 +39,80 @@ let
   };
 in
 {
-  environment.systemPackages = [
-    health
-    excludes
-  ];
-  systemd.tmpfiles.rules = [
-    "d /var/lib/weasel-storage-health 0700 root root -"
-    "d /run/weasel-storage-health 0755 root root -"
-  ];
-  systemd.services.weasel-btrfs-health = {
-    description = "Measure Btrfs allocation reserve and metadata commitments";
-    unitConfig.RequiresMountsFor = "/home";
-    serviceConfig = {
-      Type = "oneshot";
-      ExecStart = "${health}/bin/weasel-btrfs-health record";
-      Nice = 19;
-      IOSchedulingClass = "idle";
-      UMask = "0077";
-    };
+  options.weasel.codex.requirements = lib.mkOption {
+    type = toml.type;
+    default = { };
+    description = "Additive local Codex requirements; other policies can merge here.";
   };
-  systemd.timers.weasel-btrfs-health = {
-    wantedBy = [ "timers.target" ];
-    timerConfig = {
-      OnBootSec = "2min";
-      OnUnitActiveSec = "15min";
+
+  config = {
+    weasel.codex.requirements = {
+      features.hooks = true;
+      hooks = {
+        managed_dir = "${health}";
+        PreToolUse = [
+          {
+            matcher = "^(Bash|exec_command|shell_command)$";
+            hooks = [
+              {
+                type = "command";
+                command = "${health}/bin/weasel-btrfs-health codex-hook";
+                timeout = 5;
+                statusMessage = "Checking Btrfs development capacity";
+              }
+            ];
+          }
+        ];
+      };
     };
-  };
-  systemd.services.weasel-btrfs-reserve = {
-    description = "Reclaim a bounded Btrfs data allocation reserve when idle";
-    unitConfig.RequiresMountsFor = "/home";
-    serviceConfig = {
-      Type = "oneshot";
-      ExecStart = "${health}/bin/weasel-btrfs-health maintain";
-      Nice = 19;
-      IOSchedulingClass = "idle";
-      UMask = "0077";
-      # The helper bounds individual passes and cancels its own timed-out pass.
-      TimeoutStartSec = "10min";
+    environment.etc."codex/requirements.toml".source =
+      toml.generate "weasel-codex-requirements.toml" config.weasel.codex.requirements;
+    environment.systemPackages = [
+      health
+      excludes
+    ];
+    systemd.tmpfiles.rules = [
+      "d /var/lib/weasel-storage-health 0700 root root -"
+      "d /run/weasel-storage-health 0755 root root -"
+    ];
+    systemd.services.weasel-btrfs-health = {
+      description = "Measure Btrfs allocation reserve and metadata commitments";
+      unitConfig.RequiresMountsFor = "/home";
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${health}/bin/weasel-btrfs-health record";
+        Nice = 19;
+        IOSchedulingClass = "idle";
+        UMask = "0077";
+      };
     };
-  };
-  systemd.timers.weasel-btrfs-reserve = {
-    wantedBy = [ "timers.target" ];
-    timerConfig = {
-      OnBootSec = "10min";
-      OnUnitActiveSec = "1h";
-      RandomizedDelaySec = "5min";
+    systemd.timers.weasel-btrfs-health = {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "2min";
+        OnUnitActiveSec = "15min";
+      };
+    };
+    systemd.services.weasel-btrfs-reserve = {
+      description = "Reclaim a bounded Btrfs data allocation reserve when idle";
+      unitConfig.RequiresMountsFor = "/home";
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = "${health}/bin/weasel-btrfs-health maintain";
+        Nice = 19;
+        IOSchedulingClass = "idle";
+        UMask = "0077";
+        # The helper bounds individual passes and cancels its own timed-out pass.
+        TimeoutStartSec = "10min";
+      };
+    };
+    systemd.timers.weasel-btrfs-reserve = {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "10min";
+        OnUnitActiveSec = "1h";
+        RandomizedDelaySec = "5min";
+      };
     };
   };
 }

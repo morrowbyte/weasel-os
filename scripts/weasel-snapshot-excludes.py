@@ -74,7 +74,8 @@ def allocated(path):
 
 def inventory(home):
     roots = [home / p for p in ('source', 'Documents/Codex', '.t3/worktrees',
-                               '.t3/scratch', 'weasel-os', 'factorio-character-mod',
+                               '.t3/scratch', '.t3-morrowbyte/worktrees',
+                               '.t3-morrowbyte/scratch', 'weasel-os', 'factorio-character-mod',
                                'factorio-space-age-modpack')]
     candidates = []
     visited = 0
