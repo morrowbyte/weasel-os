@@ -56,7 +56,7 @@ def pressure(row):
     commitment_headroom = max(0, m['total_bytes'] - m['bytes_used'] - reservations - m['bytes_readonly'])
     tight = physical_fraction >= .90 or commitment_headroom < GIB
     critical = row['device_errors'] > 0 or row['free_bytes'] < 30 * GIB or (
-        row['unallocated_bytes'] < 8 * GIB and tight)
+        row['unallocated_bytes'] < RESERVE_TRIGGER and tight)
     return {'level': 'critical' if critical else ('watch' if row['unallocated_bytes'] < RESERVE_TRIGGER else 'healthy'),
             'metadata_used_fraction': physical_fraction,
             'metadata_reservations_bytes': reservations,
@@ -150,10 +150,14 @@ def maintain(target, measure_fn=measure, run_fn=run, deadline_seconds=300):
     if 'No balance found' not in run_fn('btrfs', 'balance', 'status', target):
         return {**result, 'outcome': 'deferred', 'reason': 'existing balance'}
     started = time.monotonic()
-    # At most four passes and 24 nonempty data chunks. Never rebalance metadata
-    # or change its DUP profile. Stop at the target or after the time budget.
-    for filters in ('usage=0', 'usage=5,limit=8', 'usage=10,limit=8', 'usage=20,limit=8'):
+    # At most four passes and 24 nonempty data chunks. Escalate the usage
+    # filter if sparse chunks cannot restore the reserve. Never rebalance
+    # metadata or change its DUP profile. Stop at the target or time budget.
+    after = before
+    budget_reason = 'pass budget exhausted before reserve target'
+    for filters in ('usage=0', 'usage=5,limit=8', 'usage=30,limit=8', 'usage=50,limit=8'):
         if time.monotonic() - started >= deadline_seconds:
+            budget_reason = 'time budget exhausted'
             break
         reason = transaction_reason() or active_build()
         if reason:
@@ -167,14 +171,24 @@ def maintain(target, measure_fn=measure, run_fn=run, deadline_seconds=300):
             if 'No balance found' not in run_fn('btrfs', 'balance', 'status', target):
                 raise RuntimeError('Timed-out balance did not release')
             return {**result, 'outcome': 'cancelled', 'reason': 'pass time budget exceeded'}
+        except subprocess.CalledProcessError as error:
+            after = measure_fn(target)
+            steps.append({'filter': filters, 'unallocated_bytes': after['unallocated_bytes'],
+                          'returncode': error.returncode})
+            return {**result, 'outcome': 'failed',
+                    'reason': 'balance failed: ' + (error.stderr or str(error)).strip()[:512],
+                    'after_unallocated_bytes': after['unallocated_bytes']}
         after = measure_fn(target)
         steps.append({'filter': filters, 'unallocated_bytes': after['unallocated_bytes']})
         if after['device_errors']:
             raise RuntimeError('Device errors observed after balance')
         if after['unallocated_bytes'] >= RESERVE_TARGET:
             break
-    return {**result, 'outcome': 'completed',
-            'after_unallocated_bytes': after['unallocated_bytes'] if steps else before['unallocated_bytes']}
+    if after['unallocated_bytes'] >= RESERVE_TARGET:
+        return {**result, 'outcome': 'completed',
+                'after_unallocated_bytes': after['unallocated_bytes']}
+    return {**result, 'outcome': 'target-not-reached', 'reason': budget_reason,
+            'after_unallocated_bytes': after['unallocated_bytes']}
 
 
 def notify():
@@ -183,7 +197,7 @@ def notify():
     state = json.loads(PUBLIC.read_text())
     if time.time() - state['measurement']['time'] > 3600:
         return
-    if state['consecutive_critical'] < 2:
+    if state['consecutive_critical'] < 1:
         return
     stamp = Path.home() / '.local/state/weasel-storage-health/last-notice'
     if stamp.exists() and time.time() - stamp.stat().st_mtime < 1800:
@@ -196,7 +210,7 @@ def notify():
     if row['device_errors']:
         text += f" Gerätefehler: {row['device_errors']}."
     maintenance = state.get('maintenance') or {}
-    if maintenance.get('outcome') in ('deferred', 'cancelled'):
+    if maintenance.get('outcome') in ('deferred', 'cancelled', 'failed', 'target-not-reached'):
         text += f" Wartung: {maintenance['outcome']} ({maintenance.get('reason', 'unbekannt')})."
     subprocess.run(['notify-send', '--urgency=critical', 'Development resource guard', text], check=True)
     stamp.parent.mkdir(parents=True, exist_ok=True, mode=0o700)

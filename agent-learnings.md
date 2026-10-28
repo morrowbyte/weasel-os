@@ -1514,3 +1514,9 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 
 - Updated existing configured sources: flake.lock, packages/chatgpt/default.nix, packages/t3code/source.json.
 - Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
+
+### 2026-10-28 — Btrfs metadata ENOSPC prevention
+
+- The reserve job's usage<=20 filters completed without releasing physical block groups while metadata/DUP approached capacity. Extend the four-pass/24-data-chunk budget to usage0/5/30/50, stop at the reserve target, and report failed or target-not-reached outcomes accurately.
+- Treat tight metadata below the existing 40GiB reserve trigger as critical and notify on the first critical measurement; retain metadata DUP, update/build exclusion checks, balance ownership and timeout cancellation.
+- Verification: `TMPDIR=/dev/shm PYTHONDONTWRITEBYTECODE=1 python3 tests/test-btrfs-reserve.py` (15 tests); Python AST parse and `git diff --check`; `nix eval --no-write-lock-file .#nixosConfigurations.nixy-laptop.config.system.build.toplevel.drvPath`; isolated health-wrapper derivation build (only ShellCheck fetched), wrapper help and read-only `/home` health check. No system activation.

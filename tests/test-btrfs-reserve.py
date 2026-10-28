@@ -69,8 +69,78 @@ class SafetyTests(unittest.TestCase):
                                     lambda *args: calls.append(args) or 'No balance found')
         self.assertEqual(result['after_unallocated_bytes'], 50 * health.GIB)
         self.assertEqual(len([args for args in calls if 'start' in args]), 2)
-        self.assertEqual(health.pressure(row(39))['level'], 'watch')
+        self.assertEqual(health.pressure(row(39))['level'], 'critical')
         self.assertEqual(health.pressure(row(50))['level'], 'healthy')
+
+    def test_stalled_reserve_escalates_without_expanding_pass_or_chunk_budget(self):
+        calls = []
+        with patch.object(health, 'transaction_reason', return_value=None), \
+             patch.object(health, 'active_build', return_value=None):
+            result = health.maintain('/home', lambda p: row(unallocated=1),
+                                    lambda *args: calls.append(args) or 'No balance found')
+        starts = [args for args in calls if 'start' in args]
+        self.assertEqual([args[3] for args in starts], [
+            '-dusage=0', '-dusage=5,limit=8', '-dusage=30,limit=8',
+            '-dusage=50,limit=8'])
+        self.assertEqual(len(starts), 4)
+        self.assertEqual(sum(int(args[3].split('limit=')[1])
+                             for args in starts if 'limit=' in args[3]), 24)
+        self.assertEqual(result['outcome'], 'target-not-reached')
+        self.assertEqual(result['after_unallocated_bytes'], health.GIB)
+        self.assertIn('budget', result['reason'])
+
+    def test_deadline_prevents_additional_balance_passes(self):
+        calls = []
+        with patch.object(health, 'transaction_reason', return_value=None), \
+             patch.object(health, 'active_build', return_value=None), \
+             patch.object(health.time, 'monotonic', side_effect=[0, 0, 301]):
+            result = health.maintain('/home', lambda p: row(unallocated=1),
+                                    lambda *args: calls.append(args) or 'No balance found')
+        self.assertEqual(len([args for args in calls if 'start' in args]), 1)
+        self.assertEqual(result['outcome'], 'target-not-reached')
+        self.assertEqual(result['reason'], 'time budget exhausted')
+
+    def test_enospc_is_reported_with_partial_reclamation_and_no_more_passes(self):
+        calls = []
+        samples = iter([row(unallocated=1), row(unallocated=2)])
+        def run(*args):
+            calls.append(args)
+            if 'start' in args:
+                raise subprocess.CalledProcessError(1, args, stderr='ERROR: No space left on device')
+            return 'No balance found'
+        with patch.object(health, 'transaction_reason', return_value=None), \
+             patch.object(health, 'active_build', return_value=None):
+            result = health.maintain('/home', lambda p: next(samples), run)
+        self.assertEqual(result['outcome'], 'failed')
+        self.assertIn('No space left on device', result['reason'])
+        self.assertEqual(result['after_unallocated_bytes'], 2 * health.GIB)
+        self.assertEqual(result['steps'][0]['returncode'], 1)
+        self.assertEqual(len([args for args in calls if 'start' in args]), 1)
+
+    def test_tight_metadata_is_critical_before_reserve_reaches_eight_gib(self):
+        self.assertEqual(health.pressure(row(unallocated=39))['level'], 'critical')
+        sample = row(unallocated=39)
+        sample['metadata'].update(bytes_used=6 * health.GIB, bytes_reserved=0)
+        self.assertEqual(health.pressure(sample)['level'], 'watch')
+
+    def test_first_critical_measurement_notifies_with_failed_maintenance(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            public = root / 'status.json'
+            sample = row(unallocated=1)
+            sample.update(target='/home', time=health.time.time())
+            public.write_text(json.dumps({
+                'measurement': sample, **health.pressure(sample),
+                'consecutive_critical': 1,
+                'maintenance': {'outcome': 'target-not-reached', 'reason': 'pass budget exhausted'}}))
+            with patch.object(health, 'PUBLIC', public), \
+                 patch.object(health.Path, 'home', return_value=root), \
+                 patch.object(health.subprocess, 'run') as command:
+                health.notify()
+                command.assert_called_once()
+                self.assertIn('target-not-reached', command.call_args.args[0][-1])
+                self.assertTrue((root / '.local/state/weasel-storage-health/last-notice').exists())
 
     def test_migration_refuses_low_reserve_before_mutation(self):
         with tempfile.TemporaryDirectory() as tmp:
