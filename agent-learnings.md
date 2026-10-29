@@ -1528,3 +1528,8 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 - Laptop-only managed hooks are generated through mergeable weasel.codex.requirements settings; existing approval/sandbox policy is untouched. New user hooks would require trust review; managed hooks use the root-managed immutable wrapper. Do not overwrite pre-existing live requirements when installing a temporary override.
 - Verification: focused Btrfs regression suite, AST/Nix syntax and diff checks; affected laptop drvPath evaluation and isolated health-wrapper/requirements builds; read-only live admission and hook-contract checks. No system activation or full host build.
 - Include `.t3-morrowbyte/worktrees` and `.t3-morrowbyte/scratch` in read-only build-output inventory alongside legacy T3 roots; retain symlink, mount, tracked-file and idle-migration safeguards. No active-tree migration or second TTL cleaner.
+
+### 2026-10-29 — batch candidate 20261029T111114Z-e87c0d83
+
+- Updated existing configured sources: flake.lock, packages/codex-acp.nix, packages/t3code/source.json.
+- Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
