@@ -1533,3 +1533,8 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 
 - Updated existing configured sources: flake.lock, packages/codex-acp.nix, packages/t3code/source.json.
 - Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
+
+### 2026-10-30 — batch candidate 20261030T110143Z-74bcfee8
+
+- Updated existing configured sources: flake.lock, packages/chatgpt/default.nix, packages/codex-acp.nix, packages/netbird-bin.nix, packages/netbird-ui-bin.nix, packages/t3code/source.json.
+- Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.

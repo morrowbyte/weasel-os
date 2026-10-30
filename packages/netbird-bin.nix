@@ -6,11 +6,11 @@
 
 stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "netbird-client-bin";
-  version = "0.81.5";
+  version = "0.82.0";
 
   src = fetchurl {
     url = "https://github.com/netbirdio/netbird/releases/download/v${finalAttrs.version}/netbird_${finalAttrs.version}_linux_amd64.tar.gz";
-    hash = "sha256-4I+eo/bZ5VvxqndrCMJRRq/cRWV/YC7QLBpK5ma513U=";
+    hash = "sha256-tWn2XeMD0hMXvHFvMRYALizxda4iqfbSvtkSAKL1AAs=";
   };
 
   dontUnpack = true;
