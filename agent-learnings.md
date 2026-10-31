@@ -1542,3 +1542,8 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 ### 2026-10-31 — preserve generated Dux runtime baseline
 
 - Preserve the installed DMS generator’s Google Sans Flex CSS and dual Dux/DMS floating plus opacity rule as already effective out-of-store bytes; do not overwrite runtime files. Exact installed template/method comparison and `niri validate -c ~/.config/niri/config.kdl` passed. Laptop/Desktop drvPath evaluation verifies configuration; no GUI/app restart or helper change.
+
+### 2026-10-31 — batch candidate 20261031T110733Z-4c82a819
+
+- Updated existing configured sources: flake.lock, packages/t3code/source.json, packages/tuios-bin.nix.
+- Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
