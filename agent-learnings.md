@@ -1570,3 +1570,8 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 ### 2026-11-01 — Tagesbaseline: vorhandene DMS-Generatorausgabe erhalten
 - Bereits dirty vor Tagesbeginn: DMS-Settingsmigration auf configVersion42 und Cursor-EOF-Newline. Beide exakten Arbeitsdateien vor Übernahme privat gesichert; keine Defaults zurückgesetzt. Aktive DMS-Datei unter ~/.config/dms ist strukturell gleich bis auf das bereits deklarativ hinzugefügte Sophos-VPN-Barwidget; kein Launcher/Appstart oder neuer Einstellungsentscheid.
 - Prüfung: JSONparse, exakter Cursorvergleich ohne EOF-Newline, Live-/Repo-Schlüsselvergleich und vorhandene profile/home/client.nix-Widgettransformation. Normale signierte Baselinesicherung, tatsächlicher Hostbuild/Aktivierung folgen getrennt im geschützten OS-Tagesauftrag.
+
+### 2026-11-01 — batch candidate 20261101T111251Z-20e9dda5
+
+- Updated existing configured sources: packages/chatgpt/default.nix, packages/t3code/source.json, packages/tuios-bin.nix.
+- Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
