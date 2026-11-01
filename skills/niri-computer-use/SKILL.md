@@ -40,7 +40,11 @@ compact inventory does not prove closure. Preserve uncertain or user-owned
 windows and report them instead of applying process-level cleanup.
 
 For the full workflow, keep the selected output visibly marked with the
-click-through blue indicator. Start `weasel-computer-use-indicator run
+click-through blue indicator. Use the managed `~/.local/bin/weasel-computer-use-indicator`
+for every `run`, `activity` and `end` call. Do not resolve the bare command from
+PATH: an older system profile may still precede the managed user deployment.
+If the managed executable is missing or rejects `--activity`, report that exact
+installation mismatch instead of falling back to the old system command. Start `~/.local/bin/weasel-computer-use-indicator run
 --task-id ID --output OUTPUT --activity "Konkrete aktuelle Tätigkeit" --stdin-control` in the executing worker's owned
 foreground `exec_command` session with `tty=true` and `yield_time_ms=1000`;
 read its actual ready event, retain the session ID and
@@ -446,7 +450,7 @@ T3 library path. Do not change T3's or the user's global environment, and verify
 the actual new app/window and GUI result after launch.
 
 Show a short concrete current activity through `--activity` when starting the
-indicator; update phases with `weasel-computer-use-indicator activity --task-id ID
+indicator; update phases with `~/.local/bin/weasel-computer-use-indicator activity --task-id ID
 --text "Konkrete aktuelle Tätigkeit"`. Preserve an authored activity label rather
 than replacing it with a generic label. Physical Alt+Escape stops the current
 Computer Use and queue. Ask the user why they stopped and await further

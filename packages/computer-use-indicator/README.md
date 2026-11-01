@@ -182,3 +182,12 @@ input and hides the indicator. It does not permanently lock Crew. Ask the user
 why they stopped and await further instructions before a new task; never replay
 the stopped task or resume automatically. Bare Escape is ordinary app input.
 Ctrl+Alt+Escape remains the independent explicit persistent takeover command.
+
+### Managed user deployment
+
+After a scoped Home Manager rollout, invoke
+`~/.local/bin/weasel-computer-use-indicator` explicitly for `run`, `activity`
+and `end`. The system profile can still expose an older package of the same
+version until the next OS activation; a bare PATH lookup therefore does not
+identify the current managed helper. The installed Computer Use skill uses this
+explicit path. Do not fall back to an incompatible system-profile helper.
