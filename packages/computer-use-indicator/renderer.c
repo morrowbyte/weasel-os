@@ -89,10 +89,16 @@ static GtkWidget *surface(int width, int height, gboolean left, gboolean right,
     gtk_layer_set_anchor(GTK_WINDOW(window), GTK_LAYER_SHELL_EDGE_BOTTOM, bottom);
     if (label) {
         GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 14);
+        gtk_widget_set_margin_start(box, 16);
+        gtk_widget_set_margin_end(box, 16);
+        gtk_widget_set_margin_top(box, 8);
+        gtk_widget_set_margin_bottom(box, 8);
         GtkWidget *text = gtk_label_new(activity);
         activity_label = text;
         gtk_label_set_ellipsize(GTK_LABEL(text), PANGO_ELLIPSIZE_END);
+        gtk_label_set_width_chars(GTK_LABEL(text), 30);
         gtk_label_set_max_width_chars(GTK_LABEL(text), 55);
+        gtk_label_set_xalign(GTK_LABEL(text), 0.0f);
         GtkWidget *shortcut = gtk_label_new("Alt + Esc  ·  Abbrechen");
         gtk_widget_set_name(shortcut, "abort-shortcut");
         gtk_widget_set_can_focus(text, FALSE);
