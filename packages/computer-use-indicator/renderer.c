@@ -15,12 +15,14 @@
 #include "monitor-match.h"
 
 #define LEASE_US (4 * G_USEC_PER_SEC)
-#define MAX_LINE 64
+#define MAX_LINE 512
 static GtkWidget *surfaces[5];
 static GdkMonitor *target;
 static GdkRectangle expected;
 static GdkRectangle initial_gdk_geometry;
 static char *output_name, *task_id;
+static const char *activity = "Computer Use";
+static GtkWidget *activity_label;
 static gint64 last_heartbeat;
 static gboolean begun, stopped;
 static gboolean target_valid = TRUE;
@@ -86,9 +88,18 @@ static GtkWidget *surface(int width, int height, gboolean left, gboolean right,
     gtk_layer_set_anchor(GTK_WINDOW(window), GTK_LAYER_SHELL_EDGE_TOP, top);
     gtk_layer_set_anchor(GTK_WINDOW(window), GTK_LAYER_SHELL_EDGE_BOTTOM, bottom);
     if (label) {
-        GtkWidget *text = gtk_label_new("Computer Use · Esc zum Abbrechen");
+        GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 14);
+        GtkWidget *text = gtk_label_new(activity);
+        activity_label = text;
+        gtk_label_set_ellipsize(GTK_LABEL(text), PANGO_ELLIPSIZE_END);
+        gtk_label_set_max_width_chars(GTK_LABEL(text), 55);
+        GtkWidget *shortcut = gtk_label_new("Alt + Esc  ·  Abbrechen");
+        gtk_widget_set_name(shortcut, "abort-shortcut");
         gtk_widget_set_can_focus(text, FALSE);
-        gtk_container_add(GTK_CONTAINER(window), text);
+        gtk_box_pack_start(GTK_BOX(box), text, TRUE, TRUE, 0);
+        gtk_box_pack_end(GTK_BOX(box), shortcut, FALSE, FALSE, 0);
+        gtk_container_add(GTK_CONTAINER(window), box);
+        gtk_layer_set_margin(GTK_WINDOW(window), GTK_LAYER_SHELL_EDGE_TOP, 12);
     }
     g_signal_connect(window, "realize", G_CALLBACK(click_through), NULL);
     g_signal_connect(window, "map", G_CALLBACK(surface_mapped), NULL);
@@ -103,6 +114,13 @@ static void process_line(const char *line) {
         for (unsigned i = 0; i < G_N_ELEMENTS(surfaces); i++) gtk_widget_show_all(surfaces[i]);
     } else if (!strcmp(line, "v1 heartbeat") && begun) {
         last_heartbeat = g_get_monotonic_time();
+    } else if (!strncmp(line, "v1 activity ", 12) && begun) {
+        const char *value = line + 12;
+        if (!*value || !g_utf8_validate(value, -1, NULL) || g_utf8_strlen(value, -1) > 120) {
+            finish("invalid_activity");
+        } else {
+            gtk_label_set_text(GTK_LABEL(activity_label), value);
+        }
     } else if (!strcmp(line, "v1 end")) {
         finish("explicit_end");
     } else {
@@ -175,11 +193,15 @@ static gboolean identifier(const char *value) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 7 || !identifier(argv[1]) || !identifier(argv[2])) {
+    if ((argc != 7 && argc != 8) || !identifier(argv[1]) || !identifier(argv[2])) {
         fprintf(stderr, "usage: renderer OUTPUT TASK_ID X Y LOGICAL_WIDTH LOGICAL_HEIGHT\n");
         return 2;
     }
     output_name = argv[1]; task_id = argv[2];
+    if (argc == 8) {
+        if (!g_utf8_validate(argv[7], -1, NULL) || g_utf8_strlen(argv[7], -1) > 120 || !*argv[7]) return 2;
+        activity = argv[7];
+    }
     int *values[] = {&expected.x, &expected.y, &expected.width, &expected.height};
     for (unsigned i = 0; i < G_N_ELEMENTS(values); i++) {
         char *end = NULL; errno = 0;
@@ -210,8 +232,9 @@ int main(int argc, char **argv) {
     GtkCssProvider *css = gtk_css_provider_new();
     const char *style =
         "#computer-use-edge { background: #2788ff; min-width: 0; min-height: 0; padding: 0; margin: 0; border: none; }"
-        "#computer-use-label { background: #176dde; color: white; border: none; padding: 5px 12px; margin: 0; }"
-        "#computer-use-label label { color: white; font: bold 13px sans-serif; }";
+        "#computer-use-label { background: #16243a; color: white; border: 1px solid #4698ff; border-radius: 16px; padding: 10px 18px; margin: 0; }"
+        "#computer-use-label label { color: white; font: 500 14px sans-serif; }"
+        "#abort-shortcut { color: #b8d8ff; font: 600 12px sans-serif; }";
     GError *error = NULL;
     if (!gtk_css_provider_load_from_data(css, style, -1, &error)) {
         fprintf(stderr, "Indicator style invalid\n"); return 5;

@@ -82,6 +82,13 @@ Git history uses short, imperative, scope-first messages (for example: `added ll
 - The canonical `~/weasel-os` checkout stays a real directory because installed update/source validators reject symlink ancestors; `~/source/system/weasel-os` links to it. Old compatibility links for other moved projects preserve existing scripts and thread references. New work uses the organized source paths.
 - Old locally unnecessary clean repositories may be removed after remote publication is verified; preserve unpublished changes/branches and local-only settings first. Downloadable installers and obsolete duplicate builds are disposable; VPN profiles, credentials, saves and unique personal files are preserved.
 
-## Current CI backend (2026-10-15 owner instruction)
+## Build location (owner decision 2026-11-01)
 
-Use Blacksmith for this repository's GitHub Actions CI, compilation, packaging and full suites. This supersedes earlier Namespace-only guidance. Preserve the documented native Windows ARM64 exception where applicable. Never move build pressure to the laptop or Hephaestus. See the existing CI operations guide for exact runner labels and acceptance boundaries.
+For weasel-os, run quick syntax checks and focused lightweight tests on the laptop.
+Run longer builds, compilation and full suites on the existing project Boat.dev VM.
+Do not use Blacksmith or ask another daily build-location question for this project.
+Reuse the existing Boat instance, source checkout and caches; keep its budget and
+bounded lifetime, and report a concrete missing build capability instead of silently
+moving a long build onto the laptop. This project-specific owner decision supersedes
+older daily-location and Blacksmith-only guidance. Live desktop validation remains
+on nixy-laptop with one Computer Use owner and explicit Stop boundaries.

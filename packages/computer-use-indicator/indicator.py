@@ -215,9 +215,41 @@ class LifecycleProbe:
             self.stream.close()
 
 
-def selected_geometry(output):
+def graphical_environment():
+    """Resolve only named display variables; never copy the manager's secrets."""
+    names = ("NIRI_SOCKET", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR")
+    values = {name: os.environ[name] for name in names if os.environ.get(name)}
+    if any(name not in values for name in names):
+        result = subprocess.run([os.environ.get("WEASEL_INDICATOR_SYSTEMCTL", "systemctl"), "--user", "show-environment"],
+                                capture_output=True, text=True, timeout=1, check=True)
+        for line in result.stdout.splitlines():
+            name, separator, value = line.partition("=")
+            if separator and name in names and name not in values and value:
+                values[name] = value
+    runtime = Path(values.get("XDG_RUNTIME_DIR", ""))
+    if not runtime.is_absolute() or runtime.is_symlink():
+        raise CapabilityError("graphical session runtime identity unavailable")
+    info = runtime.stat()
+    if info.st_uid != os.getuid() or not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077:
+        raise CapabilityError("graphical session runtime is not private")
+    niri_socket = Path(values.get("NIRI_SOCKET", ""))
+    display = values.get("WAYLAND_DISPLAY", "")
+    if niri_socket.parent != runtime or not niri_socket.name.startswith("niri.") or niri_socket.is_symlink():
+        raise CapabilityError("Niri socket does not belong to the graphical session")
+    socket_info = niri_socket.stat()
+    if socket_info.st_uid != os.getuid() or not stat.S_ISSOCK(socket_info.st_mode):
+        raise CapabilityError("graphical Niri endpoint is not the owned socket")
+    if not display or "/" in display or not display.startswith("wayland-"):
+        raise CapabilityError("Wayland display name unavailable")
+    display_info = (runtime / display).stat()
+    if display_info.st_uid != os.getuid() or not stat.S_ISSOCK(display_info.st_mode):
+        raise CapabilityError("Wayland endpoint is not the owned socket")
+    return dict(os.environ, **values)
+
+
+def selected_geometry(output, graphical_env=None):
     niri = os.environ.get("WEASEL_INDICATOR_NIRI", "niri")
-    result = subprocess.run([niri, "msg", "--json", "outputs"], capture_output=True, timeout=1, check=True)
+    result = subprocess.run([niri, "msg", "--json", "outputs"], env=graphical_env, capture_output=True, timeout=1, check=True)
     outputs = json.loads(result.stdout)
     if not isinstance(outputs, dict) or output not in outputs:
         raise CapabilityError("selected Niri output unavailable")
@@ -244,12 +276,19 @@ def status_stop_reason(status, initial):
     return None
 
 
+def valid_activity(value):
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= 120 and not any(ord(c) < 32 or ord(c) == 127 for c in value)
+
+
 def control(args):
     path, _ = task_paths(args.task_id)
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
         stream.settimeout(1)
         stream.connect(str(path))
-        stream.sendall(json.dumps({"revision": REVISION, "event": args.command, "task_id": args.task_id}).encode() + b"\n")
+        request = {"revision": REVISION, "event": args.command, "task_id": args.task_id}
+        if args.command == "activity":
+            request["activity"] = args.text
+        stream.sendall(json.dumps(request).encode() + b"\n")
         response = read_line(stream, 4096)
     emit("control_reply", **response)
     return 0 if response.get("ok") is True else 1
@@ -267,7 +306,8 @@ def run(args):
         raise CapabilityError("actor must be resumed and idle before indicator begin")
     if initial.get("actor_release_confirmed") is not True:
         raise CapabilityError("actor release is unconfirmed")
-    geometry, logical = selected_geometry(args.output)
+    graphical_env = graphical_environment()
+    geometry, logical = selected_geometry(args.output, graphical_env)
     if task_socket.exists() or lease_path.exists():
         raise CapabilityError("task indicator already exists; no stale owner is replaced")
     renderer_path = os.environ.get("WEASEL_INDICATOR_RENDERER")
@@ -295,6 +335,7 @@ def run(args):
         "pid": os.getpid(), "start_ticks": process_start_ticks(os.getpid()),
         "owner_pid": owner_pid, "owner_start_ticks": owner_ticks,
         "actor_session_id": initial["session_id"], "actor_epoch": initial["epoch"],
+        "activity": args.activity,
         "started_monotonic": started, "deadline_monotonic": deadline,
         "geometry": geometry, "control_socket": str(task_socket),
     }
@@ -315,9 +356,9 @@ def run(args):
         with os.fdopen(lease_fd, "w") as lease:
             json.dump(metadata, lease, ensure_ascii=False)
         renderer = subprocess.Popen(
-            [renderer_path, args.output, args.task_id, *(str(value) for value in geometry)],
+            [renderer_path, args.output, args.task_id, *(str(value) for value in geometry), args.activity],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, bufsize=1,
+            text=True, bufsize=1, env=graphical_env,
         )
         selector.register(renderer.stdout, selectors.EVENT_READ, "renderer")
         if args.stdin_control:
@@ -382,7 +423,13 @@ def run(args):
                             request = read_line(client, 4096)
                             valid = uid == os.getuid() and request.get("revision") == REVISION and request.get("task_id") == args.task_id
                             event = request.get("event")
-                            response = {"ok": valid and event in ("status", "end"), "task_id": args.task_id, "ready": ready}
+                            if event == "activity":
+                                valid = valid and valid_activity(request.get("activity"))
+                                if valid:
+                                    args.activity = request["activity"]
+                                    renderer.stdin.write("v1 activity " + args.activity + "\n")
+                                    renderer.stdin.flush()
+                            response = {"ok": valid and event in ("status", "end", "activity"), "task_id": args.task_id, "ready": ready, "activity": args.activity}
                             client.sendall(json.dumps(response).encode() + b"\n")
                             if valid and event == "end":
                                 reason = "explicit_end"
@@ -467,7 +514,7 @@ def run(args):
                 probe = LifecycleProbe(selector, actor_socket, args.task_id, initial, scope_token)
                 last_valid_at = None  # no renewal while authority is unknown
             if probe is None and now >= next_geometry:
-                new_geometry, new_logical = selected_geometry(args.output)
+                new_geometry, new_logical = selected_geometry(args.output, graphical_env)
                 if new_geometry != geometry or new_logical != logical:
                     reason = "output_geometry_changed"
                     break
@@ -549,19 +596,27 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     runner = commands.add_parser("run", help="foreground task-owned indicator; use an owned exec session")
     runner.add_argument("--task-id", required=True)
+    runner.add_argument("--activity", default="Computer Use", help="concise current activity, e.g. Einstellungen prüfen; no credentials or document contents")
     runner.add_argument("--scope-token", help="ownership token returned by desktop_resume for physical-Escape re-arm")
     runner.add_argument("--output", required=True)
     runner.add_argument("--owner-pid", type=int)
     runner.add_argument("--owner-start-ticks", type=int)
     runner.add_argument("--stdin-control", action="store_true", help="EOF or v1 end on stdin also ends the indicator; use a PTY/held pipe")
     runner.add_argument("--max-runtime-seconds", type=int, help="optional explicit lifetime bound; otherwise follows the task owner")
+    activity_command = commands.add_parser("activity", help="update the current task activity without restarting its indicator")
+    activity_command.add_argument("--task-id", required=True)
+    activity_command.add_argument("--text", required=True)
     for name in ("status", "end"):
         command = commands.add_parser(name)
         command.add_argument("--task-id", required=True)
     args = parser.parse_args()
+    if args.command == "activity" and not valid_activity(args.text):
+        parser.error("activity must contain 1–120 printable characters")
     if not IDENTIFIER.fullmatch(args.task_id):
         parser.error("task ID must contain 1–128 ASCII letters, digits, dots, dashes or underscores")
     if args.command == "run":
+        if not valid_activity(args.activity):
+            parser.error("activity must contain 1–120 printable characters")
         if not IDENTIFIER.fullmatch(args.output):
             parser.error("invalid output identifier")
         if args.max_runtime_seconds is not None and not 1 <= args.max_runtime_seconds <= sys.maxsize:

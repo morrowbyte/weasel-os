@@ -7,6 +7,7 @@
   makeWrapper,
   python3,
   niri,
+  systemd,
 }:
 stdenv.mkDerivation {
   pname = "weasel-computer-use-indicator";
@@ -44,7 +45,8 @@ stdenv.mkDerivation {
     makeWrapper ${python3}/bin/python3 "$out/bin/weasel-computer-use-indicator" \
       --add-flags "$out/libexec/indicator.py" \
       --set WEASEL_INDICATOR_RENDERER "$out/libexec/weasel-computer-use-indicator-renderer" \
-      --set WEASEL_INDICATOR_NIRI "${niri}/bin/niri"
+      --set WEASEL_INDICATOR_NIRI "${niri}/bin/niri" \
+      --set WEASEL_INDICATOR_SYSTEMCTL "${systemd}/bin/systemctl"
     runHook postInstall
   '';
   doCheck = true;

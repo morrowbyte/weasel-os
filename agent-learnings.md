@@ -1547,3 +1547,7 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 
 - Updated existing configured sources: flake.lock, packages/t3code/source.json, packages/tuios-bin.nix.
 - Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
+
+## 2026-11-01 — Indicator and task-only Alt+Escape
+- The installed indicator failed before READY when Crew child processes lacked NIRI_SOCKET/WAYLAND_DISPLAY. Resolve only display variables from the user manager and validate owned sockets; do not copy other manager environment values. Add a bounded literal activity label/update and physical Alt+Escape cancellation without a persistent takeover; keep explicit takeover separate.
+- Boat prepare currently syncs the canonical project checkout rather than this feature worktree. Verify source SHA256 and apply the exact owned patch in the existing VM before attributing test results. Keep CARGO_TARGET_DIR outside the Nix package source. Checks so far: Python lifecycle fixtures and focused environment/activity regressions, Nix parse, laptop drvPath eval; final Boat Rust/package/live evidence follows in the task receipt.

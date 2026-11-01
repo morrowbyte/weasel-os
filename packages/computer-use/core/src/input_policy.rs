@@ -1,5 +1,5 @@
 //! Cooperative desktop input: ordinary physical activity invalidates targets,
-//! while a physical Escape press cancels the current Computer Use task.
+//! while a physical Alt+Escape chord cancels the current Computer Use task.
 //! No raw key, text, pointer position or button values are retained here.
 use super::*;
 
@@ -118,7 +118,7 @@ impl Policy {
         })
     }
     pub fn status(&self, last_activity_ms: u64) -> Value {
-        json!({"revision":REVISION,"mode":"cooperative_escape_only","generation":self.generation(),"last_activity_monotonic_ms":last_activity_ms,"held_controls":self.held_controls.load(Ordering::SeqCst),"held_state_known":self.held_state_known.load(Ordering::SeqCst),"escape_aborts":true,"escape_policy":"cancel_current_task","idle_escape_latches":false,"persistent_escape_stop":false,"ordinary_activity_latches":false,"automatic_replay":false,"recovery":"ordinary activity or held controls require release, known input monitor state, fresh observation and deliberate continuation; no desktop_resume needed","collision_limit":"evdev observation and input dispatch cannot be atomic; overlapping dispatched input may have partial effects"})
+        json!({"revision":REVISION,"mode":"cooperative_alt_escape_only","abort_shortcut":"Alt+Escape","generation":self.generation(),"last_activity_monotonic_ms":last_activity_ms,"held_controls":self.held_controls.load(Ordering::SeqCst),"held_state_known":self.held_state_known.load(Ordering::SeqCst),"escape_aborts":true,"escape_policy":"cancel_current_task","idle_escape_latches":false,"persistent_escape_stop":false,"ordinary_activity_latches":false,"automatic_replay":false,"recovery":"ordinary activity or held controls require release, known input monitor state, fresh observation and deliberate continuation; no desktop_resume needed","collision_limit":"evdev observation and input dispatch cannot be atomic; overlapping dispatched input may have partial effects"})
     }
 }
 

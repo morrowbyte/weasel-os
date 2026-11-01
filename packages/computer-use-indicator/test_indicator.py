@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 SOURCE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("indicator", SOURCE / "indicator.py")
@@ -92,6 +93,13 @@ class IndicatorLifecycle(unittest.TestCase):
             " elif line == 'v1 end\\n': break\n"
         )
         self.renderer.chmod(0o700)
+        self.graphical_sockets = []
+        for name in ("niri.fixture.sock", "wayland-fixture"):
+            endpoint = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            endpoint.bind(str(self.runtime / name))
+            self.graphical_sockets.append(endpoint)
+            self.addCleanup(endpoint.close)
+
         self.niri = self.runtime / "niri.py"
         self.niri.write_text(f"#!{sys.executable}\nfrom pathlib import Path\nprint(Path({str(self.niri_state_path)!r}).read_text())\n")
         self.niri.chmod(0o700)
@@ -99,6 +107,8 @@ class IndicatorLifecycle(unittest.TestCase):
             **os.environ, "XDG_RUNTIME_DIR": str(self.runtime),
             "WEASEL_COMPUTER_USE_SOCKET": str(self.actor_path),
             "WEASEL_INDICATOR_NIRI": str(self.niri),
+            "NIRI_SOCKET": str(self.runtime / "niri.fixture.sock"),
+            "WAYLAND_DISPLAY": "wayland-fixture",
             "WEASEL_INDICATOR_RENDERER": str(self.renderer),
         }
         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -213,6 +223,30 @@ class IndicatorLifecycle(unittest.TestCase):
             Path(receipt_dir).mkdir(mode=0o700, parents=True, exist_ok=True)
             (Path(receipt_dir) / (self.id().split(".")[-1] + ".json")).write_text(json.dumps({"test":self.id(), "scope":"private fake actor/Niri/renderer only; no desktop/input", "runs":self.receipt_runs, "control_requests":self.control_requests}, indent=2) + "\n")
         self.temp.cleanup()
+
+    def test_missing_process_display_uses_only_validated_user_manager_display_values(self):
+        manager = type("Result", (), {"stdout": "NIRI_SOCKET=" + str(self.runtime / "niri.fixture.sock") + "\nWAYLAND_DISPLAY=wayland-fixture\nIGNORED_SECRET=never-copy\n"})()
+        with patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(self.runtime)}, clear=True), patch.object(indicator.subprocess, "run", return_value=manager):
+            resolved = indicator.graphical_environment()
+            self.assertEqual(resolved["WAYLAND_DISPLAY"], "wayland-fixture")
+            self.assertEqual(resolved["NIRI_SOCKET"], str(self.runtime / "niri.fixture.sock"))
+            self.assertNotIn("IGNORED_SECRET", resolved)
+        with patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(self.runtime), "NIRI_SOCKET": "/tmp/foreign.sock", "WAYLAND_DISPLAY": "wayland-fixture"}, clear=True):
+            with self.assertRaises(indicator.CapabilityError):
+                indicator.graphical_environment()
+
+    def test_activity_update_is_bounded_plain_text_and_keeps_owned_scope(self):
+        process = self.launch(extra=("--activity", "Einstellungen prüfen"))
+        self.ready(process)
+        result = subprocess.run([sys.executable, str(SOURCE / "indicator.py"), "activity", "--task-id", "fixture-task", "--text", "Ergebnis kontrollieren"], env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Ergebnis kontrollieren", result.stdout)
+        self.assertTrue(any(item["line"] == "v1 activity Ergebnis kontrollieren" for item in self.protocol()))
+        for value in ("", "x" * 121, "bad\nline", "bad\x1bline"):
+            self.assertFalse(indicator.valid_activity(value))
+        self.assertTrue(indicator.valid_activity("<plain text> & ü"))
+        self.assertEqual(self.end_control().returncode, 0)
+        process.wait(timeout=2)
 
     def launch(self, task="fixture-task", extra=()):
         process = subprocess.Popen(

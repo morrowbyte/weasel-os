@@ -7,7 +7,7 @@ library helper owns its lifetime and reads actor status. GTK is isolated here so
 the Rust capture/input core does not gain a GTK dependency or another Cargo tree.
 
 The indicator has four solid blue 4-logical-pixel edge surfaces and a compact top
-label: **Computer Use · Esc zum Abbrechen**. All five surfaces request the overlay
+label: a concise current activity and **Alt + Esc · Abbrechen**. All five surfaces request the overlay
 layer, explicitly disable keyboard focus, use empty input regions, and reserve no
 workspace. They target one explicitly selected output, including full-screen
 windows. The intended live target on this laptop is `DP-6`; the user's T3 monitor
@@ -25,7 +25,7 @@ with `tty=true` so stdin is held open:
 
 ```sh
 weasel-computer-use-indicator run \
-  --task-id demo-luna-r1 --output DP-6 --stdin-control
+  --task-id demo-luna-r1 --output DP-6 --activity "Einstellungen prüfen" --stdin-control
 ```
 
 Wait for the concise `ready` event before desktop actions. Retain the command's
@@ -165,3 +165,20 @@ Primary API references:
 GTK3 layer-shell is maintained; it was selected to reuse this laptop's available
 small presentation stack. A future Rust/voice application can replace this
 renderer while preserving the task/lease boundary.
+
+## Current activity and cancellation
+
+Supply a short concrete `--activity` at begin. Update it between workflow phases
+without replacing the task scope:
+
+```sh
+weasel-computer-use-indicator activity --task-id demo-luna-r1 --text "Ergebnis kontrollieren"
+```
+
+Text is bounded to 120 printable characters and rendered literally, never as
+markup. Do not include credentials or private document contents. Physical
+Alt+Escape cancels current Computer Use and its queued batches, releases owned
+input and hides the indicator. It does not permanently lock Crew. Ask the user
+why they stopped and await further instructions before a new task; never replay
+the stopped task or resume automatically. Bare Escape is ordinary app input.
+Ctrl+Alt+Escape remains the independent explicit persistent takeover command.

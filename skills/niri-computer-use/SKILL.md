@@ -41,7 +41,7 @@ windows and report them instead of applying process-level cleanup.
 
 For the full workflow, keep the selected output visibly marked with the
 click-through blue indicator. Start `weasel-computer-use-indicator run
---task-id ID --output OUTPUT --stdin-control` in the executing worker's owned
+--task-id ID --output OUTPUT --activity "Konkrete aktuelle Tätigkeit" --stdin-control` in the executing worker's owned
 foreground `exec_command` session with `tty=true` and `yield_time_ms=1000`;
 read its actual ready event, retain the session ID and
 keep it alive across model-thinking gaps. End with `v1 end\n` through that
@@ -78,7 +78,7 @@ request authorizing desktop work permits an explicit `desktop_resume` once the
 actor is released and its input monitor is ready and quiet. Do not request a
 second generic permission for that already authorized work. An idle physical
 Esc invalidates old observations without creating a stop. While the
-task-owned Computer Use indicator scope is open, Esc cancels the current task,
+task-owned Computer Use indicator scope is open, Alt+Escape cancels the current task,
 drops queued work and releases owned controls. End its indicator and inspect
 completed or partial effects; do not retry the stopped operation in that turn.
 Escape does not create a persistent takeover or require a separate permission
@@ -331,7 +331,7 @@ it clears old captures/handles, so obtain a new observation. It does not return
 control after a human takeover. Continued failure requires inspection and a
 deliberate reconnect of only this owned backend with the latch preserved.
 
-The cooperative input policy reserves physical **Esc** for explicit desktop
+The cooperative input policy reserves physical **Alt+Escape** for explicit desktop
 abort. Ordinary local keyboard/mouse activity does not latch takeover: it
 invalidates stale observations and may interrupt a colliding action batch.
 For `input_conflict`, inspect completed/possible effects, confirm release,
@@ -374,7 +374,7 @@ than escalating clicks or counting two failed frames as an abort. True Esc,
 explicit cancellation and actual capability loss still stop promptly.
 Never replay an uncertain edit, copy, move or submission without checking its
 actual state. Keep recovery bounded and report sustained contention instead of
-fighting for focus. Physical Esc stops the current task. User steering or a
+fighting for focus. Physical Alt+Escape stops the current task. User steering or a
 continuation request in a later turn permits a fresh Computer Use task without
 an extra Escape-unlock prompt; never replay the stopped task or its queue.
 Explicit takeover still requires the user to return control. Synthetic agent Esc
@@ -444,3 +444,12 @@ OWN_FILE`); retain the graphical-session variables and let Meld's own wrapper
 select its libraries. A transient user service must likewise omit the inherited
 T3 library path. Do not change T3's or the user's global environment, and verify
 the actual new app/window and GUI result after launch.
+
+Show a short concrete current activity through `--activity` when starting the
+indicator; update phases with `weasel-computer-use-indicator activity --task-id ID
+--text "Konkrete aktuelle Tätigkeit"`. Preserve an authored activity label rather
+than replacing it with a generic label. Physical Alt+Escape stops the current
+Computer Use and queue. Ask the user why they stopped and await further
+instructions before creating a fresh task. Never automatically resume or replay.
+Bare Escape remains ordinary application input; synthetic agent Escape is not a
+human abort. Keep Ctrl+Alt+Escape as explicit persistent desktop takeover.

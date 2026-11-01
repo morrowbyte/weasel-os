@@ -22,6 +22,9 @@ in
   # This key works independently of a busy or disconnected client.
   xdg.configFile."niri/config.kdl".text = lib.mkAfter ''
     binds {
+      Alt+Escape allow-inhibiting=false {
+        spawn "${computerUse}/bin/weasel-computer-use" "call" "desktop_cancel" "{}";
+      }
       Ctrl+Alt+Escape allow-inhibiting=false {
         spawn "${computerUse}/bin/weasel-computer-use" "call" "desktop_takeover" "{}";
       }

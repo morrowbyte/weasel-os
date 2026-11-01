@@ -390,7 +390,7 @@ fn check_epoch(state: &State, epoch: Option<u64>) -> R<()> {
         return Err("Action batch deadline elapsed; pending dispatch/capture stopped".into());
     }
     if epoch.is_some_and(|e| state.epoch.load(Ordering::SeqCst) != e) {
-        Err("Canceled or desktop taken over; queued actions discarded".into())
+        Err("Canceled Computer Use or desktop taken over; queued actions discarded. Ask the user why they stopped and await further instructions before a new task. Do not automatically resume or replay.".into())
     } else {
         state.input_policy.check_bound()
     }
@@ -449,6 +449,9 @@ fn physical_activity(state: &State, escape: bool, simulation: bool) {
     }
     // Serialize Escape with scope admission and queued-to-active handoff. It
     // cancels the current request, never changes the explicit takeover latch.
+    // Fence queued/running work before waiting for any bookkeeping mutex.
+    // Idle chords only invalidate old observations; they never latch control.
+    let epoch = state.epoch.fetch_add(1, Ordering::SeqCst) + 1;
     let scope_gate = state.task_scope_gate.lock();
     let now = state.started.elapsed().as_millis() as u64;
     state.last_human_ms.store(now.max(1), Ordering::SeqCst);
@@ -457,7 +460,6 @@ fn physical_activity(state: &State, escape: bool, simulation: bool) {
     if scope_gate.is_err() {
         // Unknown scope state must stop every existing writer. Future admission
         // also refuses this poisoned gate; no lasting Escape marker is needed.
-        let epoch = state.epoch.fetch_add(1, Ordering::SeqCst) + 1;
         record(state, "physical_escape_scope_unknown", json!({"epoch":epoch,"task_canceled":true,"takeover_latched":state.takeover.load(Ordering::SeqCst),"error":"Task scope gate poisoned"}));
         return;
     }
@@ -474,7 +476,6 @@ fn physical_activity(state: &State, escape: bool, simulation: bool) {
     // Advance the epoch before cleanup so all running/preparing/queued batches
     // stop at their next boundary and perform their normal owned-input release.
     // Admitted IDs remain tombstoned; an old indicator's end is cleanup only.
-    let epoch = state.epoch.fetch_add(1, Ordering::SeqCst) + 1;
     if let Ok(mut scopes) = state.task_scopes.lock() {
         if let Ok(mut used) = state.task_scope_ids.lock() {
             used.extend(scopes.keys().cloned());
@@ -484,9 +485,9 @@ fn physical_activity(state: &State, escape: bool, simulation: bool) {
     record(state, "physical_escape_cancel", json!({"epoch":epoch,"source":if simulation{"controlled_evdev_simulation"}else{"physical_escape"},"task_canceled":true,"takeover_latched":state.takeover.load(Ordering::SeqCst),"takeover_persisted":false,"fresh_observation_required":true,"old_task_or_queue_resumed":false,"controlled_simulation":simulation}));
 }
 
-fn physical_held_controls(file: &fs::File, key_capable: bool) -> Option<usize> {
+fn physical_key_state(file: &fs::File, key_capable: bool) -> Option<(usize, [bool; 2])> {
     if !key_capable {
-        return Some(0);
+        return Some((0, [false; 2]));
     }
     // Linux EVIOCGKEY(96), bounded KEY_MAX=0x2ff bitset. Kernel snapshot is
     // authoritative after queued events; do not add queued presses to it.
@@ -503,7 +504,8 @@ fn physical_held_controls(file: &fs::File, key_capable: bool) -> Option<usize> {
     if result < 0 {
         None
     } else {
-        Some(mask.iter().map(|byte| byte.count_ones() as usize).sum())
+        let held = |code: usize| mask[code / 8] & (1 << (code % 8)) != 0;
+        Some((mask.iter().map(|byte| byte.count_ones() as usize).sum(), [held(56), held(100)]))
     }
 }
 
@@ -511,6 +513,7 @@ fn physical_event_chunk(
     bytes: &[u8],
     source: input_policy::Source,
     sync_lost: &mut bool,
+    alt_keys: &mut [bool; 2],
 ) -> (bool, bool) {
     let mut activity = false;
     let mut escape = false;
@@ -528,12 +531,15 @@ fn physical_event_chunk(
             }
             continue;
         }
+        if source != input_policy::Source::Synthetic && kind == 1 && matches!(code, 56 | 100) && matches!(value, 0 | 1) {
+            alt_keys[usize::from(code == 100)] = value == 1;
+        }
         match input_policy::classify(kind, code, value, source) {
             input_policy::Event::Ignore => {}
             input_policy::Event::Activity => activity = true,
             input_policy::Event::Escape => {
                 activity = true;
-                escape = true;
+                escape |= alt_keys.iter().any(|held| *held);
             }
             input_policy::Event::Resync => {
                 activity = true;
@@ -552,6 +558,7 @@ fn human_monitor(state: Arc<State>) {
         key_capable: bool,
         held_controls: Option<usize>,
         sync_lost: bool,
+        alt_keys: [bool; 2],
     }
     // Private integration-test hook: only a deliberately created, uniquely named
     // uinput device may exercise the real evdev monitor. Never configured in the
@@ -631,7 +638,8 @@ fn human_monitor(state: Arc<State>) {
                     {
                         Ok(file) => {
                             let key_capable = mask & (1 << 1) != 0;
-                            let held_controls = physical_held_controls(&file, key_capable);
+                            let key_state = physical_key_state(&file, key_capable);
+                            let held_controls = key_state.map(|state| state.0);
                             devices.push(Device {
                                 path,
                                 file,
@@ -639,6 +647,7 @@ fn human_monitor(state: Arc<State>) {
                                 key_capable,
                                 held_controls,
                                 sync_lost: false,
+                                alt_keys: key_state.map_or([false; 2], |state| state.1),
                             });
                         }
                         Err(_) => denied += 1,
@@ -658,7 +667,7 @@ fn human_monitor(state: Arc<State>) {
                         input_policy::Source::Physical
                     };
                     let (activity, escape) =
-                        physical_event_chunk(&buf[..n], source, &mut device.sync_lost);
+                        physical_event_chunk(&buf[..n], source, &mut device.sync_lost, &mut device.alt_keys);
                     if activity {
                         physical_activity(&state, escape, device.simulation);
                     }
@@ -671,7 +680,10 @@ fn human_monitor(state: Arc<State>) {
             device.held_controls = if device.sync_lost {
                 None
             } else {
-                physical_held_controls(&device.file, device.key_capable)
+                physical_key_state(&device.file, device.key_capable).map(|state| {
+                    device.alt_keys = state.1;
+                    state.0
+                })
             };
         }
         if !remove.is_empty() {
@@ -690,7 +702,7 @@ fn human_monitor(state: Arc<State>) {
             .input_policy
             .update_holds(held_controls, held_state_known);
         if let Ok(mut status) = state.human_monitor.lock() {
-            *status = json!({"available":!devices.is_empty(),"watched_devices":devices.len(),"permission_denied_devices":denied,"held_controls":held_controls,"held_state_known":held_state_known,"held_state_source":"bounded authoritative EVIOCGKEY snapshots per key-capable device; actual bitmasks discarded","event_data_retained":false,"policy":"cooperative_escape_only","escape_abort":"physical EV_KEY KEY_ESC press only; owned synthetic input excluded","ordinary_activity":"invalidates observations; current conflicting batch releases without takeover","source":"physical evdev activity; excludes direct uinput; includes Bluetooth UHID","controlled_simulation_device_enabled":test_device.is_some(),"watched_simulation_devices":devices.iter().filter(|d|d.simulation).count(),"poll_interval_ms":5,"inventory_rescan_ms":2000});
+            *status = json!({"available":!devices.is_empty(),"watched_devices":devices.len(),"permission_denied_devices":denied,"held_controls":held_controls,"held_state_known":held_state_known,"held_state_source":"bounded authoritative EVIOCGKEY snapshots per key-capable device; actual bitmasks discarded","event_data_retained":false,"policy":"cooperative_alt_escape_only","escape_abort":"physical Alt+Escape press; owned synthetic input excluded","ordinary_activity":"invalidates observations; current conflicting batch releases without takeover","source":"physical evdev activity; excludes direct uinput; includes Bluetooth UHID","controlled_simulation_device_enabled":test_device.is_some(),"watched_simulation_devices":devices.iter().filter(|d|d.simulation).count(),"poll_interval_ms":5,"inventory_rescan_ms":2000});
         }
         thread::sleep(Duration::from_millis(5));
     }
@@ -1331,7 +1343,7 @@ fn observe_inner_guarded(state: &State, args: &Value, actor_held: bool, allowed_
     } else {
         image.clone()
     };
-    let data = json!({"schema":1,"observation_id":id,"epoch":epoch,"input_generation":input_generation,"input_policy":state.input_policy.status(state.last_human_ms.load(Ordering::SeqCst)),"global_keyboard":global_keyboard_capability(),"observed_unix_ms":SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis(),"monotonic_ms":state.started.elapsed().as_secs_f64()*1000.0,"monotonic_system_ms":system_monotonic_ms(),"expires_after_ms":60000,"desktop":"niri-wayland","focused_window":focus,"windows":windows,"workspaces":workspaces,"outputs":outputs,"capture":{"output":name,"path":image,"mime_type":"image/png","image_width":width,"image_height":height,"scale":1,"coordinate_frame":"output-local screenshot pixels; origin top-left; dimensions are actual PNG dimensions and may differ by rounding from Niri logical size","output_logical":geometry},"capabilities":{"capture":true,"window_focus":true,"window_close_request":close_window_capability(),"desktop_launch":launch::capability(),"pointer":"wlr_virtual_pointer_v2","keyboard":{"shortcuts":"app shortcuts: persistent canonical German evdev Wayland keyboard; keymap refreshed before every chord. key_scope=compositor or chords containing Super/meta/logo use an owned Linux uinput device so Niri compositor bindings can process them; permission/monitor/device-open failures refuse before any batch input. Device creation is a capability side effect; open/write acknowledgement is not UI success","unicode_text":{"auto":"plain clipboard for known Electron app IDs or >1000characters; wtype for shorter text in other apps","keyboard_limit_characters":1000,"max_text_utf8_bytes":65536,"electron_keyboard":"known unreliable due physical DomCode and supplementary Unicode; explicit override requires app-specific proof"}},"clipboard":{"backend":"Rust wlr-data-control helper with an owned user scope","plain_text_restore":"best effort; source ownership checked, no atomic selection CAS; skipped after cancel/takeover","rich_or_nontext_restore":"supported bounded MIME payloads including HTML, COMPOUND_TEXT and original Chromium metadata; no portal handles/password hints","rich_preserve_request":"snapshot same offer before replacement; unknown/oversized/sensitive formats refuse","ignored_transport_mimes":["SAVE_TARGETS","GTK_TEXT_BUFFER_CONTENTS"],"holder_lifetime":"separate user scope; source replacement or graphical session shutdown","potential_change_reported_on_failure":true},"semantic_tree":"desktop_semantic: read-only Cua application/PID tree; unique window inventory mapping does not attest node window scope; Cua bounds are not screenshot coordinates","takeover":"physical Escape aborts only a live queued/preparing/running action or indicator-owned task scope; idle Escape only invalidates observations. Active Escape cancels the task and drops queued work without latching control; a new task with fresh observations can operate after owned input releases. Stopped task IDs cannot reopen. Explicit takeover remains a separate persistent stop."},"timing_ms":{"capture":capture_start.elapsed().as_secs_f64()*1000.0,"observe_total":start.elapsed().as_secs_f64()*1000.0}});
+    let data = json!({"schema":1,"observation_id":id,"epoch":epoch,"input_generation":input_generation,"input_policy":state.input_policy.status(state.last_human_ms.load(Ordering::SeqCst)),"global_keyboard":global_keyboard_capability(),"observed_unix_ms":SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis(),"monotonic_ms":state.started.elapsed().as_secs_f64()*1000.0,"monotonic_system_ms":system_monotonic_ms(),"expires_after_ms":60000,"desktop":"niri-wayland","focused_window":focus,"windows":windows,"workspaces":workspaces,"outputs":outputs,"capture":{"output":name,"path":image,"mime_type":"image/png","image_width":width,"image_height":height,"scale":1,"coordinate_frame":"output-local screenshot pixels; origin top-left; dimensions are actual PNG dimensions and may differ by rounding from Niri logical size","output_logical":geometry},"capabilities":{"capture":true,"window_focus":true,"window_close_request":close_window_capability(),"desktop_launch":launch::capability(),"pointer":"wlr_virtual_pointer_v2","keyboard":{"shortcuts":"app shortcuts: persistent canonical German evdev Wayland keyboard; keymap refreshed before every chord. key_scope=compositor or chords containing Super/meta/logo use an owned Linux uinput device so Niri compositor bindings can process them; permission/monitor/device-open failures refuse before any batch input. Device creation is a capability side effect; open/write acknowledgement is not UI success","unicode_text":{"auto":"plain clipboard for known Electron app IDs or >1000characters; wtype for shorter text in other apps","keyboard_limit_characters":1000,"max_text_utf8_bytes":65536,"electron_keyboard":"known unreliable due physical DomCode and supplementary Unicode; explicit override requires app-specific proof"}},"clipboard":{"backend":"Rust wlr-data-control helper with an owned user scope","plain_text_restore":"best effort; source ownership checked, no atomic selection CAS; skipped after cancel/takeover","rich_or_nontext_restore":"supported bounded MIME payloads including HTML, COMPOUND_TEXT and original Chromium metadata; no portal handles/password hints","rich_preserve_request":"snapshot same offer before replacement; unknown/oversized/sensitive formats refuse","ignored_transport_mimes":["SAVE_TARGETS","GTK_TEXT_BUFFER_CONTENTS"],"holder_lifetime":"separate user scope; source replacement or graphical session shutdown","potential_change_reported_on_failure":true},"semantic_tree":"desktop_semantic: read-only Cua application/PID tree; unique window inventory mapping does not attest node window scope; Cua bounds are not screenshot coordinates","takeover":"physical Alt+Escape aborts only a live queued/preparing/running action or indicator-owned task scope; idle Escape only invalidates observations. Active Escape cancels the task and drops queued work without latching control; a new task with fresh observations can operate after owned input releases. Stopped task IDs cannot reopen. Explicit takeover remains a separate persistent stop."},"timing_ms":{"capture":capture_start.elapsed().as_secs_f64()*1000.0,"observe_total":start.elapsed().as_secs_f64()*1000.0}});
     check_epoch(state, Some(epoch))?;
     if focused(&niri_epoch(state, "windows", Some(epoch))?)
         .as_ref()
@@ -3379,12 +3391,13 @@ fn handle(state: &State, tool: &str, args: &Value, epoch: u64) -> R<Value> {
         "desktop_act" => act(state, args, epoch),
         "desktop_recover_release" => recover_release(state, args),
         "desktop_cancel" | "desktop_takeover" => {
+            // Priority cancellation fences before fallible/contended bookkeeping.
+            let next = state.epoch.fetch_add(1, Ordering::SeqCst) + 1;
             let _scope_gate = state.task_scope_gate.lock().map_err(|_| "Task scope gate poisoned")?;
             if tool == "desktop_takeover" {
                 state.takeover.store(true, Ordering::SeqCst);
             }
             let start = Instant::now();
-            let next = state.epoch.fetch_add(1, Ordering::SeqCst) + 1;
             state.task_scopes.lock().map_err(|_| "Task scopes poisoned")?.clear();
             state.reference_cache.invalidate();
             if tool == "desktop_takeover" {
@@ -3821,7 +3834,7 @@ fn tools() -> Value {
       {"name":"desktop_cancel","description":"Priority epoch cancellation independent of actor lock. Pending batches stop; held buttons release. Already-dispatched effects remain. Wait for desktop_status active=null and actor_release_confirmed=true for full release.","inputSchema":{"type":"object","properties":{}}},
       {"name":"desktop_takeover","description":"Explicit human desktop takeover, persists its cause across backend restarts and latches refusal of future actions and cancels queued/active automation. Physical Escape cancels only queued/preparing/running work or a live task-indicator scope without latching future tasks; idle Escape only invalidates stale observations. Ordinary input invalidates stale observations and releases a conflicting batch without latching takeover. Wait active=null and actor_release_confirmed=true for full release. desktop_resume then fresh observation is required.","inputSchema":{"type":"object","properties":{}}},
       {"name":"desktop_recover_release","description":"Explicit bounded recovery of unconfirmed release/receipt on existing owned actuators only. Refuses if writer busy, active task or queue nonempty. Sends only releases of owned held buttons/keys and receipt sync, no press/move/device creation/action replay, no epoch/latch/cause reset, no automatic resume. May finalize effects of already-held input. Default1500ms, maximum2000ms shared budget. Failure remains unconfirmed; original last_result preserved. Success invalidates old observations/semantic handles and requires fresh capture; inspect status queue and follow human return-of-control policy before resume.","inputSchema":{"type":"object","properties":{"timeout_ms":{"type":"integer","minimum":200,"maximum":2000,"default":1500}},"additionalProperties":false}},
-      {"name":"desktop_resume","description":"Backend startup is always latched and preserves prior explicit/legacy takeover causes. An active transition requires expected_epoch=status.epoch and expected_session_id=status.session_id for the stop the user has authorized resuming (not its historical reason.session_id); the proxy requires backend resume_binding_revision=1 and uses a new internal bound wire method so an old replacement backend cannot ignore the fence fields. An idle/unlatched older backend may return only a read-only no-op snapshot, never receive an unbound resume; stale binding refuses, never blindly refresh/retry after a new stop. Physical Escape cancels only current task scopes and batches, without requiring resume for a new task. Canceled task IDs and stale observations remain unusable. Legacy persisted physical_escape migrates to the ordinary backend_startup gate on restart. The old task and queue never resume. Explicit takeover still requires the user's return of control. No successful capture is needed before authorized startup resume; inspect resume_input_readiness, then obtain a fresh observation before input. If already unlatched with idle/released actor and empty queue, empty arguments return already_resumed without epoch/generation/cache changes or quiet checks. last_reason is historical; reason is null when marker_active=false.","inputSchema":{"type":"object","properties":{"expected_epoch":{"type":"integer","minimum":1},"expected_session_id":{"type":"string","minLength":1}},"additionalProperties":false}}
+      {"name":"desktop_resume","description":"Backend startup is always latched and preserves prior explicit/legacy takeover causes. An active transition requires expected_epoch=status.epoch and expected_session_id=status.session_id for the stop the user has authorized resuming (not its historical reason.session_id); the proxy requires backend resume_binding_revision=1 and uses a new internal bound wire method so an old replacement backend cannot ignore the fence fields. An idle/unlatched older backend may return only a read-only no-op snapshot, never receive an unbound resume; stale binding refuses, never blindly refresh/retry after a new stop. Physical Alt+Escape cancels only current task scopes and batches, without requiring resume for a new task. Canceled task IDs and stale observations remain unusable. Legacy persisted physical_escape migrates to the ordinary backend_startup gate on restart. The old task and queue never resume. Explicit takeover still requires the user's return of control. No successful capture is needed before authorized startup resume; inspect resume_input_readiness, then obtain a fresh observation before input. If already unlatched with idle/released actor and empty queue, empty arguments return already_resumed without epoch/generation/cache changes or quiet checks. last_reason is historical; reason is null when marker_active=false.","inputSchema":{"type":"object","properties":{"expected_epoch":{"type":"integer","minimum":1},"expected_session_id":{"type":"string","minLength":1}},"additionalProperties":false}}
     ]);
     // These hints describe desktop/app effects; private read caches do not
     // grant input. The managed client policy authorizes only this server.
@@ -4470,7 +4483,7 @@ mod regression {
         let dir = env::temp_dir().join(format!("weasel-core-regression-{}", std::process::id()));
         private_dir(&dir).unwrap();
         let script = dir.join("wl-copy");
-        fs::write(&script, b"#!/bin/sh\nsleep 0.4 &\nexit 0\n").unwrap();
+        fs::write(&script, b"#!/bin/sh\ncat >/dev/null\nsleep 0.4 &\nexit 0\n").unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
         let old_path = env::var_os("PATH").unwrap_or_default();
         env::set_var(
@@ -5612,7 +5625,12 @@ mod release_recovery_tests {
         let epoch = state.epoch.load(Ordering::SeqCst);
         assert!(!dir.join("takeover.json").exists());
         physical_activity(&state, true, true);
-        assert_eq!(state.epoch.load(Ordering::SeqCst), epoch, "an idle simulation cannot revive the canceled scope");
+        assert_eq!(state.epoch.load(Ordering::SeqCst), epoch.wrapping_add(1), "idle chords fence stale observations without reviving a task");
+        assert!(state.task_scopes.lock().unwrap().is_empty());
+        assert!(state.active.lock().unwrap().is_null());
+        assert_eq!(state.queued.load(Ordering::SeqCst), 0);
+        assert!(check_epoch(&state, Some(epoch)).is_err());
+        assert!(!state.takeover.load(Ordering::SeqCst));
         handle(&state, "desktop_takeover", &json!({}), epoch).unwrap();
         let explicit = fs::read(dir.join("takeover.json")).unwrap();
         *state.active.lock().unwrap() = json!({"task_id":"release-window"});
@@ -5877,7 +5895,7 @@ mod release_recovery_tests {
         let generation = state.input_policy.generation();
         physical_activity(&state, true, false);
         assert!(!state.takeover.load(Ordering::SeqCst));
-        assert_eq!(state.epoch.load(Ordering::SeqCst), epoch);
+        assert_eq!(state.epoch.load(Ordering::SeqCst), epoch.wrapping_add(1));
         assert_eq!(state.input_policy.generation(), generation + 1);
         assert!(!dir.join("takeover.json").exists());
         assert!(state.active.lock().unwrap().is_null());
@@ -6167,8 +6185,8 @@ mod release_recovery_tests {
     fn cooperative_key_state_read_failure_is_unknown_never_invented_release() {
         let (state, dir) = cooperative_fixture("cooperative-read-failure");
         let ordinary_file = fs::File::open(dir.join("events.jsonl")).unwrap();
-        assert_eq!(physical_held_controls(&ordinary_file, true), None);
-        assert_eq!(physical_held_controls(&ordinary_file, false), Some(0));
+        assert_eq!(physical_key_state(&ordinary_file, true), None);
+        assert_eq!(physical_key_state(&ordinary_file, false), Some((0, [false; 2])));
         state.input_policy.update_holds(0, false);
         assert!(!state.input_policy.controls_released());
         assert_eq!(state.epoch.load(Ordering::SeqCst), 77);
@@ -6849,6 +6867,48 @@ mod release_recovery_tests {
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
+    fn physical_abort_fences_running_work_before_contended_scope_bookkeeping() {
+        let (state, dir) = cooperative_fixture("abort-prelock");
+        let epoch = state.epoch.load(Ordering::SeqCst);
+        let gate = state.task_scope_gate.lock().unwrap();
+        let other = state.clone();
+        let worker = std::thread::spawn(move || physical_activity(&other, true, false));
+        let limit = Instant::now() + Duration::from_millis(100);
+        while state.epoch.load(Ordering::SeqCst) == epoch && Instant::now() < limit {
+            std::thread::yield_now();
+        }
+        let fenced = check_epoch(&state, Some(epoch)).is_err();
+        drop(gate);
+        worker.join().unwrap();
+        assert!(fenced, "running work must see cancellation while the bookkeeping gate is still held");
+        assert!(!state.takeover.load(Ordering::SeqCst));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn alt_escape_requires_physical_modifier_and_never_aborts_on_bare_or_synthetic_escape() {
+        let packet = |events: &[(u16, u16, i32)]| {
+            let mut bytes = Vec::new();
+            for (kind, code, value) in events {
+                let mut event = [0u8; 24];
+                event[16..18].copy_from_slice(&kind.to_ne_bytes());
+                event[18..20].copy_from_slice(&code.to_ne_bytes());
+                event[20..24].copy_from_slice(&value.to_ne_bytes());
+                bytes.extend(event);
+            }
+            bytes
+        };
+        let mut lost = false;
+        let mut alt = [false; 2];
+        assert_eq!(physical_event_chunk(&packet(&[(1, 1, 1)]), input_policy::Source::Physical, &mut lost, &mut alt), (true, false));
+        assert_eq!(physical_event_chunk(&packet(&[(1, 56, 1), (1, 1, 1)]), input_policy::Source::Physical, &mut lost, &mut alt), (true, true));
+        assert_eq!(physical_event_chunk(&packet(&[(1, 1, 2)]), input_policy::Source::Physical, &mut lost, &mut alt), (true, false));
+        assert_eq!(physical_event_chunk(&packet(&[(1, 56, 0), (1, 1, 1)]), input_policy::Source::Physical, &mut lost, &mut alt), (true, false));
+        assert_eq!(physical_event_chunk(&packet(&[(1, 100, 1), (1, 1, 1)]), input_policy::Source::Synthetic, &mut lost, &mut alt), (false, false));
+        assert_eq!(alt, [false; 2]);
+    }
+
+    #[test]
     fn cooperative_dropped_event_stream_requires_resync_and_never_replays_queued_keys() {
         let packet = |events: &[(u16, u16, i32)]| {
             let mut bytes = Vec::new();
@@ -6862,25 +6922,26 @@ mod release_recovery_tests {
             bytes
         };
         let mut lost = false;
+        let mut alt_keys = [false; 2];
         let dropped = packet(&[(0, 3, 0), (1, 1, 1), (1, 30, 1)]);
         assert_eq!(
-            physical_event_chunk(&dropped, input_policy::Source::Physical, &mut lost),
+            physical_event_chunk(&dropped, input_policy::Source::Physical, &mut lost, &mut alt_keys),
             (true, false)
         );
         assert!(lost, "held state must remain unknown until SYN_REPORT");
         let stale = packet(&[(1, 1, 1), (0, 0, 0)]);
         assert_eq!(
-            physical_event_chunk(&stale, input_policy::Source::Physical, &mut lost),
+            physical_event_chunk(&stale, input_policy::Source::Physical, &mut lost, &mut alt_keys),
             (false, false)
         );
         assert!(!lost, "next report permits authoritative ioctl resync");
-        let fresh = packet(&[(1, 1, 1)]);
+        let fresh = packet(&[(1, 56, 1), (1, 1, 1)]);
         assert_eq!(
-            physical_event_chunk(&fresh, input_policy::Source::Physical, &mut lost),
+            physical_event_chunk(&fresh, input_policy::Source::Physical, &mut lost, &mut alt_keys),
             (true, true)
         );
         assert_eq!(
-            physical_event_chunk(&fresh, input_policy::Source::Synthetic, &mut lost),
+            physical_event_chunk(&fresh, input_policy::Source::Synthetic, &mut lost, &mut alt_keys),
             (false, false)
         );
     }
