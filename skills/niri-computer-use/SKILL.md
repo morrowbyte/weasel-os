@@ -43,6 +43,9 @@ For the full workflow, keep the selected output visibly marked with the
 click-through blue indicator. Use the managed `~/.local/bin/weasel-computer-use-indicator`
 for every `run`, `activity` and `end` call. Do not resolve the bare command from
 PATH: an older system profile may still precede the managed user deployment.
+The indicator's lifecycle phase is sampled and may lag or miss a short action;
+it is not a guarantee of instantaneous input availability. Keep fresh actor
+checks and human-input conflict handling in force.
 If the managed executable is missing or rejects `--activity`, report that exact
 installation mismatch instead of falling back to the old system command. Start `~/.local/bin/weasel-computer-use-indicator run
 --task-id ID --output OUTPUT --activity "Konkrete aktuelle Tätigkeit" --stdin-control` in the executing worker's owned

@@ -13,6 +13,11 @@ workspace. They target one explicitly selected output, including full-screen
 windows. The intended live target on this laptop is `DP-6`; the user's T3 monitor
 is not automatically selected.
 
+The label also reports the last sampled lifecycle phase: active, queued, or
+waiting with confirmed release. Sampling is asynchronous (normally 100 ms), so
+it can lag or miss a short action. It is not a real-time input exclusion or
+permission signal; the actor still validates input and human activity itself.
+
 This implementation needs live Niri validation. Successful compilation, fixture
 tests and the renderer's `ready` event do not prove visible edges, click-through,
 correct physical output, full-screen stacking, or the real T3 Stop lifecycle.
@@ -66,6 +71,11 @@ The renderer accepts a held stdin pipe with these exact newline-terminated lines
 ```text
 v1 begin
 v1 heartbeat
+v1 phase waiting
+v1 phase queued
+v1 phase active
+v1 phase unknown
+v1 activity <plain text>
 v1 end
 ```
 

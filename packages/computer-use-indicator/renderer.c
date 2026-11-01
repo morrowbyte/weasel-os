@@ -23,6 +23,7 @@ static GdkRectangle initial_gdk_geometry;
 static char *output_name, *task_id;
 static const char *activity = "Computer Use";
 static GtkWidget *activity_label;
+static GtkWidget *phase_label;
 static gint64 last_heartbeat;
 static gboolean begun, stopped;
 static gboolean target_valid = TRUE;
@@ -95,6 +96,7 @@ static GtkWidget *surface(int width, int height, gboolean left, gboolean right,
         gtk_widget_set_margin_bottom(box, 8);
         GtkWidget *text = gtk_label_new(activity);
         activity_label = text;
+        phase_label = gtk_label_new("Status wird geprüft");
         gtk_label_set_ellipsize(GTK_LABEL(text), PANGO_ELLIPSIZE_END);
         gtk_label_set_width_chars(GTK_LABEL(text), 30);
         gtk_label_set_max_width_chars(GTK_LABEL(text), 55);
@@ -102,6 +104,7 @@ static GtkWidget *surface(int width, int height, gboolean left, gboolean right,
         GtkWidget *shortcut = gtk_label_new("Alt + Esc  ·  Abbrechen");
         gtk_widget_set_name(shortcut, "abort-shortcut");
         gtk_widget_set_can_focus(text, FALSE);
+        gtk_box_pack_start(GTK_BOX(box), phase_label, FALSE, FALSE, 0);
         gtk_box_pack_start(GTK_BOX(box), text, TRUE, TRUE, 0);
         gtk_box_pack_end(GTK_BOX(box), shortcut, FALSE, FALSE, 0);
         gtk_container_add(GTK_CONTAINER(window), box);
@@ -120,6 +123,13 @@ static void process_line(const char *line) {
         for (unsigned i = 0; i < G_N_ELEMENTS(surfaces); i++) gtk_widget_show_all(surfaces[i]);
     } else if (!strcmp(line, "v1 heartbeat") && begun) {
         last_heartbeat = g_get_monotonic_time();
+    } else if (!strncmp(line, "v1 phase ", 9) && begun) {
+        const char *value = line + 9;
+        if (!strcmp(value, "unknown")) gtk_label_set_text(GTK_LABEL(phase_label), "Status wird geprüft");
+        else if (!strcmp(value, "active")) gtk_label_set_text(GTK_LABEL(phase_label), "Aktion läuft");
+        else if (!strcmp(value, "queued")) gtk_label_set_text(GTK_LABEL(phase_label), "Aktion wartet");
+        else if (!strcmp(value, "waiting")) gtk_label_set_text(GTK_LABEL(phase_label), "Wartet · zuletzt frei");
+        else finish("invalid_phase");
     } else if (!strncmp(line, "v1 activity ", 12) && begun) {
         const char *value = line + 12;
         if (!*value || !g_utf8_validate(value, -1, NULL) || g_utf8_strlen(value, -1) > 120) {

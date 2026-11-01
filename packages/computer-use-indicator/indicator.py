@@ -280,6 +280,14 @@ def valid_activity(value):
     return isinstance(value, str) and bool(value.strip()) and len(value) <= 120 and not any(ord(c) < 32 or ord(c) == 127 for c in value)
 
 
+def activity_phase(status):
+    if status["actor_active"]:
+        return "active"
+    if status["queued_batches"]:
+        return "queued"
+    return "waiting"
+
+
 def control(args):
     path, _ = task_paths(args.task_id)
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
@@ -383,6 +391,7 @@ def run(args):
         ready = False
         last_valid_at = time.monotonic()
         timeout_retry = 0
+        phase = None
         stdin_pending = bytearray()
         while True:
             now = time.monotonic()
@@ -495,6 +504,9 @@ def run(args):
                 probe.close()
                 probe = None
                 last_valid_at = None
+                renderer.stdin.write("v1 phase unknown\n")
+                renderer.stdin.flush()
+                phase = None
                 if isinstance(probe_error, LifecycleTimeout) and timeout_retry == 0:
                     timeout_retry = 1
                     next_poll = now
@@ -510,6 +522,11 @@ def run(args):
                 last_valid_at = now
                 timeout_retry = 0
                 next_poll = now + POLL_SECONDS
+                new_phase = activity_phase(fresh_status)
+                if new_phase != phase:
+                    renderer.stdin.write("v1 phase " + new_phase + "\n")
+                    renderer.stdin.flush()
+                    phase = new_phase
             if probe is None and now >= next_poll:
                 probe = LifecycleProbe(selector, actor_socket, args.task_id, initial, scope_token)
                 last_valid_at = None  # no renewal while authority is unknown

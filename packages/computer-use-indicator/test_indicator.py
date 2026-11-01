@@ -248,6 +248,40 @@ class IndicatorLifecycle(unittest.TestCase):
         self.assertEqual(self.end_control().returncode, 0)
         process.wait(timeout=2)
 
+    def test_phase_tracks_actor_and_queue_without_ending_scope(self):
+        process = self.launch()
+        self.ready(process)
+
+        def wait_phase(phase):
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                if any(item["line"] == "v1 phase " + phase for item in self.protocol()):
+                    return
+                time.sleep(0.01)
+            self.fail("phase was not sent: " + phase)
+
+        wait_phase("waiting")
+        with self.actor_lock:
+            self.actor_state["queued_batches"] = 1
+        wait_phase("queued")
+        with self.actor_lock:
+            self.actor_state["active"] = {"task_id": "fixture-task"}
+            self.actor_state["actor_release_confirmed"] = False
+        wait_phase("active")
+        with self.actor_lock:
+            self.actor_state["active"] = None
+            self.actor_state["queued_batches"] = 0
+            self.actor_state["actor_release_confirmed"] = True
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if [item["line"] for item in self.protocol()].count("v1 phase waiting") >= 2:
+                break
+            time.sleep(0.01)
+        else:
+            self.fail("released phase was not restored")
+        self.assertEqual(self.end_control().returncode, 0)
+        process.wait(timeout=2)
+
     def launch(self, task="fixture-task", extra=()):
         process = subprocess.Popen(
             [sys.executable, str(SOURCE / "indicator.py"), "run", "--task-id", task,
