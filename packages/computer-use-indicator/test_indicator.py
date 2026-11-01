@@ -10,6 +10,7 @@ import os
 import signal
 from pathlib import Path
 import select
+import shlex
 import socket
 import subprocess
 import sys
@@ -26,6 +27,75 @@ spec.loader.exec_module(indicator)
 
 
 class StatusDeadline(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("WEASEL_FRAME_TEST") == "1", "requires isolated GTK display")
+    def test_renderer_ack_follows_real_gtk_draw_and_invalidates_old_transitions(self):
+        source = r'''
+#define main renderer_program_main
+#include "renderer.c"
+#undef main
+#include <assert.h>
+
+static gboolean end_test(gpointer unused) {
+    (void)unused;
+    process_line("v1 end");
+    return G_SOURCE_REMOVE;
+}
+
+int main(void) {
+    assert(gtk_init_check(NULL, NULL));
+    GtkWidget *window = gtk_offscreen_window_new();
+    phase_label = gtk_label_new("Status wird geprüft");
+    gtk_container_add(GTK_CONTAINER(window), phase_label);
+    g_signal_connect_after(phase_label, "draw", G_CALLBACK(phase_painted), NULL);
+    gtk_widget_show_all(window);
+    task_id = "frame-test";
+    begun = TRUE;
+    last_heartbeat = g_get_monotonic_time();
+    gint64 deadline = g_get_monotonic_time() + G_USEC_PER_SEC;
+    while (!gtk_widget_get_mapped(phase_label) && g_get_monotonic_time() < deadline) {
+        g_main_context_iteration(NULL, FALSE);
+        g_usleep(1000);
+    }
+    assert(gtk_widget_get_mapped(phase_label));
+    process_line("v1 phase active 41");
+    assert(phase_ack_pending); /* setter alone must not acknowledge */
+    process_line("v1 phase active 42"); /* replaces 41 before any paint */
+    assert(phase_ack_pending && phase_ack_transition == 42);
+    deadline = g_get_monotonic_time() + G_USEC_PER_SEC;
+    while (phase_ack_pending && g_get_monotonic_time() < deadline) {
+        g_main_context_iteration(NULL, FALSE);
+        g_usleep(1000);
+    }
+    assert(!phase_ack_pending); /* actual GtkLabel draw handler ran */
+    last_heartbeat = g_get_monotonic_time() - LEASE_US - 1;
+    process_line("v1 phase active 43");
+    deadline = g_get_monotonic_time() + 100000;
+    while (g_get_monotonic_time() < deadline) {
+        g_main_context_iteration(NULL, FALSE);
+        g_usleep(1000);
+    }
+    assert(!phase_ack_pending); /* expired lease discards the pending ACK */
+    process_line("v1 phase waiting");
+    assert(!phase_ack_pending); /* new phase invalidates old ACK */
+    process_line("v1 phase active 44");
+    g_idle_add_full(G_PRIORITY_HIGH, end_test, NULL, NULL);
+    gtk_main();
+    assert(stopped && !phase_ack_pending); /* end invalidates before draw */
+    gtk_widget_destroy(window);
+    return 0;
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            harness = Path(directory) / "frame-test.c"
+            binary = Path(directory) / "frame-test"
+            harness.write_text(source)
+            flags = subprocess.check_output(["pkg-config", "--cflags", "--libs", "gtk+-3.0", "gtk-layer-shell-0"], text=True)
+            subprocess.run(["cc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-I", str(SOURCE), str(harness), "-o", str(binary), *shlex.split(flags)], check=True, timeout=30)
+            run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=5, check=True)
+            events = [json.loads(line) for line in run.stdout.splitlines()]
+            acknowledgements = [event for event in events if event.get("event") == "phase_applied"]
+            self.assertEqual([(event["phase"], event["transition"]) for event in acknowledgements], [("active", 42)])
+
     def test_fragmented_response_has_total_deadline(self):
         reader, writer = socket.socketpair()
         reader.settimeout(0.12)

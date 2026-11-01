@@ -15,7 +15,9 @@ is not automatically selected.
 
 The label reports active, queued, or waiting. Before a scoped actor dispatch,
 the helper must receive a matching renderer acknowledgement for the active
-transition. The actor binds it to its session, task, epoch and transition; a
+transition after the mapped GTK label's draw handler has painted it. This is
+GTK paint evidence, not proof of physical compositor presentation. The actor
+binds it to its session, task, epoch and transition; a
 timeout or mismatch prevents dispatch. The helper keeps the active phase until
 the actor confirms release, then returns to sampled lifecycle status. The actor
 still validates human input and all other action guards.

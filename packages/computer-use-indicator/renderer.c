@@ -24,6 +24,9 @@ static char *output_name, *task_id;
 static const char *activity = "Computer Use";
 static GtkWidget *activity_label;
 static GtkWidget *phase_label;
+static gboolean phase_ack_pending;
+static unsigned long long phase_ack_transition;
+static char phase_ack_name[16];
 static gint64 last_heartbeat;
 static gboolean begun, stopped;
 static gboolean target_valid = TRUE;
@@ -34,6 +37,7 @@ static size_t pending_len;
 static void finish(const char *reason) {
     if (stopped) return;
     stopped = TRUE;
+    phase_ack_pending = FALSE;
     for (unsigned i = 0; i < G_N_ELEMENTS(surfaces); i++)
         if (surfaces[i]) gtk_widget_hide(surfaces[i]);
     printf("{\"revision\":1,\"event\":\"ended\",\"reason\":\"%s\"}\n", reason);
@@ -68,6 +72,25 @@ static gboolean window_deleted(GtkWidget *widget, GdkEvent *event, gpointer unus
     return TRUE;
 }
 
+/* This after-handler runs after GtkLabel's draw handler, not merely after its
+ * text property changed. It attests GTK painting, not compositor presentation. */
+static gboolean phase_painted(GtkWidget *widget, cairo_t *cr, gpointer unused) {
+    (void)cr; (void)unused;
+    if (!phase_ack_pending || stopped || !begun || !gtk_widget_get_mapped(widget)) return FALSE;
+    if (g_get_monotonic_time() - last_heartbeat > LEASE_US) {
+        phase_ack_pending = FALSE;
+        return FALSE;
+    }
+    const char *expected_text = !strcmp(phase_ack_name, "active") ? "Aktion läuft" :
+        !strcmp(phase_ack_name, "unknown") ? "Status wird geprüft" :
+        !strcmp(phase_ack_name, "queued") ? "Aktion wartet" : "Wartet · zuletzt frei";
+    if (strcmp(gtk_label_get_text(GTK_LABEL(widget)), expected_text)) return FALSE;
+    phase_ack_pending = FALSE;
+    printf("{\"revision\":1,\"event\":\"phase_applied\",\"task_id\":\"%s\",\"phase\":\"%s\",\"transition\":%llu}\n", task_id, phase_ack_name, phase_ack_transition);
+    fflush(stdout);
+    return FALSE;
+}
+
 static GtkWidget *surface(int width, int height, gboolean left, gboolean right,
                           gboolean top, gboolean bottom, gboolean label) {
     GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
@@ -97,6 +120,7 @@ static GtkWidget *surface(int width, int height, gboolean left, gboolean right,
         GtkWidget *text = gtk_label_new(activity);
         activity_label = text;
         phase_label = gtk_label_new("Status wird geprüft");
+        g_signal_connect_after(phase_label, "draw", G_CALLBACK(phase_painted), NULL);
         gtk_label_set_ellipsize(GTK_LABEL(text), PANGO_ELLIPSIZE_END);
         gtk_label_set_width_chars(GTK_LABEL(text), 30);
         gtk_label_set_max_width_chars(GTK_LABEL(text), 55);
@@ -129,6 +153,7 @@ static void process_line(const char *line) {
         unsigned long long transition;
         char extra;
         int fields = sscanf(value, "%15s %llu %c", name, &transition, &extra);
+        phase_ack_pending = FALSE;
         if (fields != 1 && fields != 2) { finish("invalid_phase"); return; }
         if (!strcmp(name, "unknown")) gtk_label_set_text(GTK_LABEL(phase_label), "Status wird geprüft");
         else if (!strcmp(name, "active")) gtk_label_set_text(GTK_LABEL(phase_label), "Aktion läuft");
@@ -136,9 +161,10 @@ static void process_line(const char *line) {
         else if (!strcmp(name, "waiting")) gtk_label_set_text(GTK_LABEL(phase_label), "Wartet · zuletzt frei");
         else finish("invalid_phase");
         if (!stopped && fields == 2) {
-            gdk_display_flush(gtk_widget_get_display(phase_label));
-            printf("{\"revision\":1,\"event\":\"phase_applied\",\"task_id\":\"%s\",\"phase\":\"%s\",\"transition\":%llu}\n", task_id, name, transition);
-            fflush(stdout);
+            phase_ack_transition = transition;
+            snprintf(phase_ack_name, sizeof phase_ack_name, "%s", name);
+            phase_ack_pending = TRUE;
+            gtk_widget_queue_draw(phase_label);
         }
     } else if (!strncmp(line, "v1 activity ", 12) && begun) {
         const char *value = line + 12;
