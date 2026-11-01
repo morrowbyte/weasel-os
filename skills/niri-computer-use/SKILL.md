@@ -81,7 +81,7 @@ Esc invalidates old observations without creating a stop. While the
 task-owned Computer Use indicator scope is open, Alt+Escape cancels the current task,
 drops queued work and releases owned controls. End its indicator and inspect
 completed or partial effects; do not retry the stopped operation in that turn.
-Escape does not create a persistent takeover or require a separate permission
+Alt+Escape does not create a persistent takeover or require a separate permission
 question. After the user corrects or continues the task in a new turn, use a
 fresh task ID, start its indicator and obtain fresh observations. Include that
 task ID on every `desktop_act` request; multiple action batches may share the
@@ -178,7 +178,7 @@ same task/output/window. An actionable background snapshot may have
 `shared_input_ready:false` or a changed global input generation: input in a
 different window does not invalidate object-targeted operations. Actual target,
 window/output/context changes, overlapping input in that target, incomplete
-semantics, Escape and cancellation remain checked. Keep the batch to background
+semantics, Alt+Escape and cancellation remain checked. Keep the batch to background
 semantic click/edit. There is no pointer, key, clipboard or focus fallback;
 `semantic_focus` requires foreground semantics. The app can itself change focus
 after a named action, so verify the result rather than promising isolation.
@@ -198,7 +198,7 @@ Labels can remain readable during ordinary input or held controls. Treat
 `action_ready` and `fresh_semantic_snapshot_required_for_input` separately.
 Non-actionable snapshots deliberately issue no handles. For the foreground
 route, after release obtain a fresh complete semantic snapshot and current visual observation before acting;
-ordinary input does not require a resume. Escape and cancellation remain stops.
+ordinary input does not require a resume. Alt+Escape and cancellation remain stops.
 Use only a complete snapshot and a showing, enabled node whose meaning matches the fresh
 UI. `semantic_set_value` replaces its complete editable buffer with a complete
 prior-text precondition; `semantic_click` invokes the node's exact named action.
@@ -348,7 +348,7 @@ partial effects and current contents, preserve human edits, and replan the
 remaining step from that state. If a disposable test needs an exact baseline,
 keep the interrupted buffer as evidence and continue in a fresh owned test
 document; do not silently erase the user's text or classify the conflict as
-Escape. For ordinary real work, reconcile the requested change with the current
+Alt+Escape. For ordinary real work, reconcile the requested change with the current
 contents rather than replacing the whole buffer with an older snapshot.
 Keep the same goal and task indicator through this recovery. Explicit
 cancellation/takeover stops the goal. An unrecoverable capability failure or
@@ -370,13 +370,13 @@ are not sustained contention and must not end the whole task. Give the user a
 brief progress update, keep the task indicator alive, and wait with bounded
 status checks for a short release/quiet interval before observing again. Use a
 reasonable time budget (up to 30 seconds for one contention episode) rather
-than escalating clicks or counting two failed frames as an abort. True Esc,
+than escalating clicks or counting two failed frames as an abort. Physical Alt+Escape,
 explicit cancellation and actual capability loss still stop promptly.
 Never replay an uncertain edit, copy, move or submission without checking its
 actual state. Keep recovery bounded and report sustained contention instead of
 fighting for focus. Physical Alt+Escape stops the current task. User steering or a
 continuation request in a later turn permits a fresh Computer Use task without
-an extra Escape-unlock prompt; never replay the stopped task or its queue.
+an extra Alt+Escape-unlock prompt; never replay the stopped task or its queue.
 Explicit takeover still requires the user to return control. Synthetic agent Esc
 for dialogs does not count as physical abort. Backend startup/legacy takeover
 markers remain explicit and require the current user-authorized resume.
