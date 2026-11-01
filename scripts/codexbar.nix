@@ -9,7 +9,10 @@ pkgs.stdenvNoCC.mkDerivation rec {
     hash = "sha256-giiZX1r3VMkRXgPJnlmakol33KWtqnLyTfNv1lSlmZs=";
   };
 
-  nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ];
+  nativeBuildInputs = [
+    pkgs.gnutar
+    pkgs.gzip
+  ];
 
   unpackPhase = ''
     tar -xzf "$src"

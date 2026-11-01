@@ -125,11 +125,21 @@ static void process_line(const char *line) {
         last_heartbeat = g_get_monotonic_time();
     } else if (!strncmp(line, "v1 phase ", 9) && begun) {
         const char *value = line + 9;
-        if (!strcmp(value, "unknown")) gtk_label_set_text(GTK_LABEL(phase_label), "Status wird geprüft");
-        else if (!strcmp(value, "active")) gtk_label_set_text(GTK_LABEL(phase_label), "Aktion läuft");
-        else if (!strcmp(value, "queued")) gtk_label_set_text(GTK_LABEL(phase_label), "Aktion wartet");
-        else if (!strcmp(value, "waiting")) gtk_label_set_text(GTK_LABEL(phase_label), "Wartet · zuletzt frei");
+        char name[16];
+        unsigned long long transition;
+        char extra;
+        int fields = sscanf(value, "%15s %llu %c", name, &transition, &extra);
+        if (fields != 1 && fields != 2) { finish("invalid_phase"); return; }
+        if (!strcmp(name, "unknown")) gtk_label_set_text(GTK_LABEL(phase_label), "Status wird geprüft");
+        else if (!strcmp(name, "active")) gtk_label_set_text(GTK_LABEL(phase_label), "Aktion läuft");
+        else if (!strcmp(name, "queued")) gtk_label_set_text(GTK_LABEL(phase_label), "Aktion wartet");
+        else if (!strcmp(name, "waiting")) gtk_label_set_text(GTK_LABEL(phase_label), "Wartet · zuletzt frei");
         else finish("invalid_phase");
+        if (!stopped && fields == 2) {
+            gdk_display_flush(gtk_widget_get_display(phase_label));
+            printf("{\"revision\":1,\"event\":\"phase_applied\",\"task_id\":\"%s\",\"phase\":\"%s\",\"transition\":%llu}\n", task_id, name, transition);
+            fflush(stdout);
+        }
     } else if (!strncmp(line, "v1 activity ", 12) && begun) {
         const char *value = line + 12;
         if (!*value || !g_utf8_validate(value, -1, NULL) || g_utf8_strlen(value, -1) > 120) {

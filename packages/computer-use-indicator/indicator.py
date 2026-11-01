@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import selectors
 import secrets
 import signal
@@ -27,7 +28,7 @@ REVISION = 1
 POLL_SECONDS = 0.1
 STATUS_TIMEOUT_SECONDS = 0.3
 MAX_STATUS_BYTES = 16 * 1024
-LIFECYCLE_REVISION = 3
+LIFECYCLE_REVISION = 4
 STATUS_FRESH_SECONDS = POLL_SECONDS + STATUS_TIMEOUT_SECONDS
 IDENTIFIER = re.compile(r"[A-Za-z0-9_.-]{1,128}\Z")
 
@@ -138,7 +139,7 @@ def actor_call(actor_socket, tool, arguments):
     return result
 
 
-def desktop_lifecycle(actor_socket, task_id=None, event="status", binding=None, scope_token=None, owner_processes=None):
+def desktop_lifecycle(actor_socket, task_id=None, event="status", binding=None, scope_token=None, owner_processes=None, indicator_socket=None):
     arguments = {"event": event}
     if task_id:
         arguments["task_id"] = task_id
@@ -149,6 +150,8 @@ def desktop_lifecycle(actor_socket, task_id=None, event="status", binding=None, 
         arguments["expected_epoch"] = binding["epoch"]
     if owner_processes is not None:
         arguments["owner_processes"] = owner_processes
+    if indicator_socket is not None:
+        arguments["indicator_socket"] = str(indicator_socket)
     result = actor_call(actor_socket, "desktop_indicator_lifecycle", arguments)
     return parse_lifecycle(result)
 
@@ -380,7 +383,7 @@ def run(args):
         registered = desktop_lifecycle(actor_socket, args.task_id, "begin", initial, scope_token, [
             {"pid": metadata["pid"], "start_ticks": metadata["start_ticks"]},
             {"pid": owner_pid, "start_ticks": owner_ticks},
-        ])
+        ], task_socket)
         if registered.get("task_scope_lifetime") != "owner_process":
             raise CapabilityError("actor does not support owner-bound task scope lifetime")
         renderer.stdin.write("v1 begin\n")
@@ -392,6 +395,8 @@ def run(args):
         last_valid_at = time.monotonic()
         timeout_retry = 0
         phase = None
+        phase_busy = False
+        last_transition = -1
         stdin_pending = bytearray()
         while True:
             now = time.monotonic()
@@ -432,6 +437,53 @@ def run(args):
                             request = read_line(client, 4096)
                             valid = uid == os.getuid() and request.get("revision") == REVISION and request.get("task_id") == args.task_id
                             event = request.get("event")
+                            if event == "phase":
+                                transition = request.get("transition")
+                                requested_phase = request.get("phase")
+                                valid = (valid and ready and request.get("session_id") == initial["session_id"]
+                                         and request.get("epoch") == initial["epoch"]
+                                         and request.get("scope_token") == scope_token
+                                         and type(transition) is int and transition > last_transition
+                                         and requested_phase in ("active", "release"))
+                                applied = False
+                                if valid:
+                                    last_transition = transition
+                                    if requested_phase == "active":
+                                        phase_busy = True
+                                    render_phase = "active" if requested_phase == "active" else "unknown"
+                                    renderer.stdin.write(f"v1 phase {render_phase} {transition}\n")
+                                    renderer.stdin.flush()
+                                    until = time.monotonic() + STATUS_TIMEOUT_SECONDS
+                                    pending_ack = bytearray()
+                                    while time.monotonic() < until:
+                                        if stop_signal[0] is not None:
+                                            break
+                                        if not select.select([renderer.stdout], [], [], min(0.01, max(0, until - time.monotonic())))[0]:
+                                            continue
+                                        chunk = os.read(renderer.stdout.fileno(), 4096)
+                                        if not chunk:
+                                            break
+                                        pending_ack.extend(chunk)
+                                        if len(pending_ack) > 4096:
+                                            break
+                                        while b"\n" in pending_ack:
+                                            line, _, tail = pending_ack.partition(b"\n")
+                                            pending_ack[:] = tail
+                                            rendered = json.loads(line)
+                                            if (rendered.get("revision") == REVISION and rendered.get("event") == "phase_applied"
+                                                and rendered.get("task_id") == args.task_id and rendered.get("phase") == render_phase
+                                                and rendered.get("transition") == transition):
+                                                applied = True
+                                                break
+                                        if applied:
+                                            break
+                                    if applied and requested_phase == "release":
+                                        phase_busy = False
+                                        phase = None
+                                client.sendall(json.dumps({"ok": applied, "task_id": args.task_id,
+                                    "session_id": initial["session_id"], "epoch": initial["epoch"],
+                                    "transition": transition, "phase": requested_phase}).encode() + b"\n")
+                                continue
                             if event == "activity":
                                 valid = valid and valid_activity(request.get("activity"))
                                 if valid:
@@ -504,9 +556,10 @@ def run(args):
                 probe.close()
                 probe = None
                 last_valid_at = None
-                renderer.stdin.write("v1 phase unknown\n")
-                renderer.stdin.flush()
-                phase = None
+                if not phase_busy:
+                    renderer.stdin.write("v1 phase unknown\n")
+                    renderer.stdin.flush()
+                    phase = None
                 if isinstance(probe_error, LifecycleTimeout) and timeout_retry == 0:
                     timeout_retry = 1
                     next_poll = now
@@ -523,7 +576,7 @@ def run(args):
                 timeout_retry = 0
                 next_poll = now + POLL_SECONDS
                 new_phase = activity_phase(fresh_status)
-                if new_phase != phase:
+                if not phase_busy and new_phase != phase:
                     renderer.stdin.write("v1 phase " + new_phase + "\n")
                     renderer.stdin.flush()
                     phase = new_phase

@@ -1,4 +1,10 @@
-{ config, lib, pkgs, pkgsUnstable, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  pkgsUnstable,
+  ...
+}:
 let
   repoDefaultPath = "${config.home.homeDirectory}/weasel-os";
 in
@@ -97,41 +103,40 @@ in
     mv -f "$tmp" "$settings"
   '';
 
+  home.activation.enableRunPodControlBarWidget =
+    lib.hm.dag.entryAfter [ "enableRunPodControlPlugin" ]
+      ''
+        dms_settings="$HOME/.config/DankMaterialShell/settings.json"
+        dms_tmp="$dms_settings.hm-runpod-control"
 
-  home.activation.enableRunPodControlBarWidget = lib.hm.dag.entryAfter [ "enableRunPodControlPlugin" ] ''
-    dms_settings="$HOME/.config/DankMaterialShell/settings.json"
-    dms_tmp="$dms_settings.hm-runpod-control"
-
-    if [ -f "$dms_settings" ]; then
-      ${pkgs.jq}/bin/jq '
-        def has_widget($widgets): any($widgets[]?; (if type == "object" then .id else . end) == "runPodControl");
-        .barConfigs |= map(
-          if .id == "default" and (.rightWidgets | has_widget(.) | not) then
-            .rightWidgets |= (map(if (type == "object" and .id == "controlCenterButton") or . == "controlCenterButton" then [{"id":"runPodControl","enabled":true}, .] else . end) | flatten)
-          else . end
-        )
-      ' "$dms_settings" > "$dms_tmp"
-      chmod 0644 "$dms_tmp"
-      mv -f "$dms_tmp" "$dms_settings"
-    fi
-  '';
-
-
+        if [ -f "$dms_settings" ]; then
+          ${pkgs.jq}/bin/jq '
+            def has_widget($widgets): any($widgets[]?; (if type == "object" then .id else . end) == "runPodControl");
+            .barConfigs |= map(
+              if .id == "default" and (.rightWidgets | has_widget(.) | not) then
+                .rightWidgets |= (map(if (type == "object" and .id == "controlCenterButton") or . == "controlCenterButton" then [{"id":"runPodControl","enabled":true}, .] else . end) | flatten)
+              else . end
+            )
+          ' "$dms_settings" > "$dms_tmp"
+          chmod 0644 "$dms_tmp"
+          mv -f "$dms_tmp" "$dms_settings"
+        fi
+      '';
 
   home.activation.enableCodexUsagePlugin = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-    plugin_settings="$HOME/.config/DankMaterialShell/plugin_settings.json"
-    plugin_tmp="$plugin_settings.hm-codex-usage"
-    mkdir -p "$HOME/.config/DankMaterialShell"
+        plugin_settings="$HOME/.config/DankMaterialShell/plugin_settings.json"
+        plugin_tmp="$plugin_settings.hm-codex-usage"
+        mkdir -p "$HOME/.config/DankMaterialShell"
 
-    if [ -f "$plugin_settings" ]; then
-      ${pkgs.jq}/bin/jq '.codexUsage.enabled = true' "$plugin_settings" > "$plugin_tmp"
-    else
-      printf '%s
-' '{"codexUsage":{"enabled":true}}' > "$plugin_tmp"
-    fi
+        if [ -f "$plugin_settings" ]; then
+          ${pkgs.jq}/bin/jq '.codexUsage.enabled = true' "$plugin_settings" > "$plugin_tmp"
+        else
+          printf '%s
+    ' '{"codexUsage":{"enabled":true}}' > "$plugin_tmp"
+        fi
 
-    chmod 0644 "$plugin_tmp"
-    mv -f "$plugin_tmp" "$plugin_settings"
+        chmod 0644 "$plugin_tmp"
+        mv -f "$plugin_tmp" "$plugin_settings"
   '';
 
   home.activation.enableCodexUsageBarWidget = lib.hm.dag.entryAfter [ "enableCodexUsagePlugin" ] ''
@@ -157,7 +162,9 @@ in
     Unit.Description = "Refresh cached Codex usage for DMS and Kai dashboard";
     Service = {
       Type = "oneshot";
-      ExecStart = "${import ../../scripts/kai-codex-usage.nix { inherit pkgs; }}/bin/kai-codex-usage update";
+      ExecStart = "${
+        import ../../scripts/kai-codex-usage.nix { inherit pkgs; }
+      }/bin/kai-codex-usage update";
     };
   };
 

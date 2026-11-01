@@ -112,6 +112,7 @@ struct TaskScope {
     owner_processes: Option<[ScopeProcess; 2]>,
     epoch: u64,
     scope_token: Option<String>,
+    indicator_socket: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -436,6 +437,54 @@ fn action_scope_still_live(state: &State, task_id: &str) -> bool {
             scope.epoch == state.epoch.load(Ordering::SeqCst)
         })
     })
+}
+
+// The presentation owner must acknowledge the exact transition before any
+// dispatch. Never hold task_scope_gate while waiting: physical Escape fences
+// this request through the epoch independently.
+fn indicator_phase(state: &State, task_id: &str, epoch: u64, phase: &str) -> R<()> {
+    let scope = state.task_scopes.lock().map_err(|_| "Task scopes poisoned")?
+        .get(task_id).cloned().ok_or("Indicator scope unavailable")?;
+    let path = scope.indicator_socket.as_ref().ok_or("Indicator lacks synchronous phase support")?;
+    let owner = scope.owner_processes.as_ref().ok_or("Indicator owner identity unavailable")?;
+    let token = scope.scope_token.as_deref().ok_or("Indicator scope token unavailable")?;
+    check_epoch(state, Some(epoch))?;
+    let mut stream = UnixStream::connect(path).map_err(|_| "Indicator phase connection unavailable")?;
+    let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    if unsafe { libc::getsockopt(stream.as_raw_fd(), libc::SOL_SOCKET, libc::SO_PEERCRED, &mut cred as *mut _ as *mut _, &mut len) } != 0
+        || cred.uid != uid() || cred.pid as u32 != owner[0].pid || !owner[0].is_live() {
+        return Err("Indicator phase peer identity mismatch".into());
+    }
+    let transition = state.serial.fetch_add(1, Ordering::SeqCst);
+    stream.set_write_timeout(Some(Duration::from_millis(100))).map_err(|e| e.to_string())?;
+    stream.set_read_timeout(Some(Duration::from_millis(10))).map_err(|e| e.to_string())?;
+    let request = json!({"revision":1,"event":"phase","task_id":task_id,"session_id":state.session_id,
+        "epoch":epoch,"scope_token":token,"transition":transition,"phase":phase});
+    writeln!(stream, "{request}").map_err(|_| "Indicator phase request failed")?;
+    let deadline = Instant::now() + remaining_timeout(Duration::from_millis(500));
+    let mut reply = Vec::new();
+    loop {
+        check_epoch(state, Some(epoch))?;
+        if !scope.is_live() || Instant::now() >= deadline { return Err("Indicator phase confirmation timed out".into()); }
+        let mut byte = [0u8; 1];
+        match stream.read(&mut byte) {
+            Ok(0) => return Err("Indicator phase confirmation closed".into()),
+            Ok(_) if byte[0] == b'\n' => break,
+            Ok(_) if reply.len() < 4096 => reply.push(byte[0]),
+            Ok(_) => return Err("Indicator phase confirmation too large".into()),
+            Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted) => continue,
+            Err(_) => return Err("Indicator phase confirmation unavailable".into()),
+        }
+    }
+    let response: Value = serde_json::from_slice(&reply).map_err(|_| "Invalid indicator phase confirmation")?;
+    if response["ok"] != true || response["task_id"] != task_id || response["session_id"] != state.session_id
+        || response["epoch"] != epoch || response["transition"] != transition || response["phase"] != phase {
+        return Err("Indicator phase confirmation binding mismatch".into());
+    }
+    check_epoch(state, Some(epoch))?;
+    if !action_scope_still_live(state, task_id) { return Err("Indicator scope ended before dispatch".into()); }
+    Ok(())
 }
 
 fn physical_activity(state: &State, escape: bool, simulation: bool) {
@@ -2438,7 +2487,11 @@ fn act_inner(state: &State, args: &Value, epoch: u64) -> R<Value> {
         Action::Key { keys, key_scope } => uses_global_keyboard(keys, *key_scope).unwrap_or(false),
         _ => false,
     });
+    let mut failure = if indicator_scope_owned {
+        indicator_phase(state, &task, epoch, "active").err()
+    } else { None };
     let preparation = (|| -> R<()> {
+        if failure.is_some() { return Ok(()); }
         if needs_global {
             let monitor = state
                 .human_monitor
@@ -2474,7 +2527,7 @@ fn act_inner(state: &State, args: &Value, epoch: u64) -> R<Value> {
         }
         Ok(())
     })();
-    let mut failure = preparation.err();
+    if failure.is_none() { failure = preparation.err(); }
     if failure.is_none() {
         *state
             .active
@@ -2593,6 +2646,11 @@ fn act_inner(state: &State, args: &Value, epoch: u64) -> R<Value> {
         .active
         .lock()
         .map_err(|_| "Active task lock poisoned")? = Value::Null;
+    if indicator_scope_owned && cleanup_ok && state.epoch.load(Ordering::SeqCst) == epoch && !own_canceled() {
+        // Failure leaves the indicator conservatively active; it never grants
+        // input or changes the already confirmed physical release.
+        let _ = indicator_phase(state, &task, epoch, "release");
+    }
     let dispatch_ms = start.elapsed().as_secs_f64() * 1000.0;
     let mut after = None;
     let mut after_error = None;
@@ -3275,6 +3333,17 @@ fn indicator_lifecycle(state: &State, args: &Value) -> R<Value> {
         } else {
             None
         };
+        let indicator_socket = if let Some(value) = args.get("indicator_socket") {
+            let path = PathBuf::from(value.as_str().ok_or("Invalid indicator socket")?);
+            let runtime = env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(format!("/run/user/{}", uid())));
+            let directory = runtime.join("weasel-computer-use").join("indicators");
+            let metadata = fs::symlink_metadata(&path).map_err(|_| "Indicator socket unavailable")?;
+            if path.parent() != Some(directory.as_path()) || !metadata.file_type().is_socket() || metadata.uid() != uid() {
+                return Err("Indicator socket identity invalid".into());
+            }
+            Some(path)
+        } else { None };
         let mut scopes = state.task_scopes.lock().map_err(|_| "Task scopes poisoned")?;
         scopes.retain(|_, scope| scope.is_live());
         if !scopes.is_empty() && !scopes.contains_key(task_id) {
@@ -3294,11 +3363,13 @@ fn indicator_lifecycle(state: &State, args: &Value) -> R<Value> {
                             }
                             scope.owner_processes = Some(processes);
                         }
-                        return Ok(text_result(json!({"schema":1,"lifecycle_revision":3,"complete":true,"session_id":state.session_id,"epoch":state.epoch.load(Ordering::SeqCst),"takeover_latched":false,"actor_active":false,"task_scope_active":true,"task_scope_lifetime":if scope.owner_processes.is_some(){"owner_process"}else{"legacy_deadline"},"queued_batches":state.queued.load(Ordering::SeqCst),"actor_release_confirmed":true})))
+                        if scope.indicator_socket != indicator_socket { return Err("Indicator socket cannot be replaced".into()); }
+                        return Ok(text_result(json!({"schema":1,"lifecycle_revision":4,"complete":true,"session_id":state.session_id,"epoch":state.epoch.load(Ordering::SeqCst),"takeover_latched":false,"actor_active":false,"task_scope_active":true,"task_scope_lifetime":if scope.owner_processes.is_some(){"owner_process"}else{"legacy_deadline"},"queued_batches":state.queued.load(Ordering::SeqCst),"actor_release_confirmed":true})))
                     }
                     None => {
                         scope.scope_token = Some(scope_token.to_string());
                         scope.owner_processes = owner_processes;
+                        scope.indicator_socket = indicator_socket;
                     }
                     Some(_) => return Err("Task scope ownership token differs from the current owner".into()),
                 }
@@ -3312,6 +3383,7 @@ fn indicator_lifecycle(state: &State, args: &Value) -> R<Value> {
                 owner_processes,
                 epoch: binding_epoch.unwrap_or_default(),
                 scope_token: Some(scope_token.to_string()),
+                indicator_socket,
             });
         }
     } else if event == "end" {
@@ -3350,7 +3422,7 @@ fn indicator_lifecycle(state: &State, args: &Value) -> R<Value> {
         scopes.get(id).is_some_and(|scope| scope.owner_processes.is_some())
     }));
     let mut reply = json!({
-        "schema":1,"lifecycle_revision":3,"complete":true,
+        "schema":1,"lifecycle_revision":4,"complete":true,
         "session_id":state.session_id,
         "task_scope_active":task_scope_active,
         "epoch":state.epoch.load(Ordering::SeqCst),
@@ -5027,7 +5099,7 @@ mod indicator_lifecycle_tests {
         let result = data(&handle(&state, "desktop_indicator_lifecycle", &json!({}), 77).unwrap());
         assert_eq!(
             result,
-            json!({"schema":1,"lifecycle_revision":3,"complete":true,
+            json!({"schema":1,"lifecycle_revision":4,"complete":true,
             "session_id":state.session_id,"epoch":77,"takeover_latched":false,
             "actor_active":false,"task_scope_active":false,"queued_batches":0,"actor_release_confirmed":true})
         );
@@ -5236,8 +5308,55 @@ mod release_recovery_tests {
                 owner_processes: None,
                 epoch: state.epoch.load(Ordering::SeqCst),
                 scope_token: Some(format!("test-owner-{task_id}")),
+                indicator_socket: None,
             },
         );
+    }
+    #[test]
+    fn indicator_phase_requires_exact_timely_ack_and_observes_epoch() {
+        for mode in ["ok", "wrong", "closed", "late", "cancel"] {
+            let (state, dir) = fixture(&format!("phase-{mode}"));
+            let state = Arc::new(state);
+            let path = dir.join("phase.sock");
+            let listener = UnixListener::bind(&path).unwrap();
+            let raw = fs::read_to_string("/proc/self/stat").unwrap();
+            let ticks: u64 = raw.rsplit_once(") ").unwrap().1.split_whitespace().nth(19).unwrap().parse().unwrap();
+            let owner = ScopeProcess { pid: std::process::id(), start_ticks: ticks };
+            let epoch = state.epoch.load(Ordering::SeqCst);
+            state.task_scopes.lock().unwrap().insert("phase-test".into(), TaskScope {
+                expires: Instant::now() + Duration::from_secs(10),
+                owner_processes: Some([owner.clone(), owner]), epoch,
+                scope_token: Some("test-token".into()), indicator_socket: Some(path),
+            });
+            let session = state.session_id.clone();
+            let worker_state = state.clone();
+            let worker = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = String::new();
+                BufReader::new(stream.try_clone().unwrap()).read_line(&mut request).unwrap();
+                let request: Value = serde_json::from_str(&request).unwrap();
+                if mode == "closed" { return; }
+                if mode == "late" { thread::sleep(Duration::from_millis(600)); }
+                if mode == "cancel" {
+                    physical_activity(&worker_state, true, false);
+                    thread::sleep(Duration::from_millis(30));
+                }
+                let transition = request["transition"].as_u64().unwrap() + u64::from(mode == "wrong");
+                let reply = json!({"ok":true,"task_id":"phase-test","session_id":session,"epoch":epoch,"phase":"active","transition":transition});
+                let _ = writeln!(stream, "{reply}");
+            });
+            let started = Instant::now();
+            let result = indicator_phase(&state, "phase-test", epoch, "active");
+            if mode == "ok" {
+                assert!(result.is_ok(), "{result:?}");
+                assert!(started.elapsed() < Duration::from_millis(100));
+            } else {
+                assert!(result.is_err(), "{mode} accepted");
+                if mode == "cancel" { assert!(started.elapsed() < Duration::from_millis(100)); }
+            }
+            worker.join().unwrap();
+            let _ = fs::remove_dir_all(dir);
+        }
     }
     fn result_data(result: &Value) -> Value {
         serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap()
@@ -5810,6 +5929,21 @@ mod release_recovery_tests {
         assert_eq!(data["fresh_observation_required"], true);
         assert!(state.active.lock().unwrap().is_null());
         assert_eq!(state.queued.load(Ordering::SeqCst), 0);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn missing_indicator_phase_confirmation_sends_no_batch_actions() {
+        let (state, dir) = cooperative_fixture("missing-phase-ack");
+        test_live_scope(&state, "missing-phase-ack");
+        let result = act(&state, &json!({"task_id":"missing-phase-ack",
+            "observation_id":"cloned-before-recovery", "actions":[{"kind":"wait","ms":1}],
+            "observe_after":false}), 77).unwrap();
+        let data = result_data(&result);
+        assert_eq!(data["status"], "failed");
+        assert_eq!(data["completed_actions"], 0);
+        assert_eq!(data["effects"], json!([]));
+        assert_eq!(data["actor_release_confirmed"], true);
+        assert!(!fs::read_to_string(dir.join("events.jsonl")).unwrap().contains("action_dispatch"));
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]

@@ -90,6 +90,12 @@ class IndicatorLifecycle(unittest.TestCase):
             f" with pathlib.Path({str(self.renderer_log)!r}).open('a') as log: log.write(json.dumps({{'at':time.monotonic(),'line':line.strip()}})+'\\n')\n"
             " if line == 'v1 begin\\n':\n"
             "  print(json.dumps({'revision':1,'event':'ready','task_id':sys.argv[2],'output':sys.argv[1],'surfaces':5}),flush=True)\n"
+            " elif line.startswith('v1 phase ') and len(line.split()) == 4:\n"
+            "  parts=line.split()\n"
+            "  if os.environ.get('FIXTURE_PHASE_MODE') == 'drop': continue\n"
+            "  if os.environ.get('FIXTURE_PHASE_MODE') == 'late': time.sleep(0.4)\n"
+            "  sequence=int(parts[3]) + (1 if os.environ.get('FIXTURE_PHASE_MODE') == 'wrong' else 0)\n"
+            "  print(json.dumps({'revision':1,'event':'phase_applied','task_id':sys.argv[2],'phase':parts[2],'transition':sequence}),flush=True)\n"
             " elif line == 'v1 end\\n': break\n"
         )
         self.renderer.chmod(0o700)
@@ -187,7 +193,7 @@ class IndicatorLifecycle(unittest.TestCase):
                 if plan.get("delay"):
                     self.server_stop.wait(plan["delay"])
                 state["actor_active"] = state.pop("active") is not None
-                state["lifecycle_revision"] = 3
+                state["lifecycle_revision"] = 4
                 state["complete"] = True
                 state.update(plan.get("status", {}))
                 response = {"content": [{"type": "text", "text": json.dumps(state)}], "isError": is_error}
@@ -281,6 +287,49 @@ class IndicatorLifecycle(unittest.TestCase):
             self.fail("released phase was not restored")
         self.assertEqual(self.end_control().returncode, 0)
         process.wait(timeout=2)
+
+    def phase_request(self, transition, phase="active", **overrides):
+        begin = next(item["arguments"] for item in self.actor_events if item["arguments"].get("event") == "begin")
+        request = {"revision": 1, "event": "phase", "task_id": "fixture-task",
+                   "session_id": "fixture-session", "epoch": 2,
+                   "scope_token": begin["scope_token"], "transition": transition, "phase": phase}
+        request.update(overrides)
+        with patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(self.runtime)}):
+            path, _ = indicator.task_paths("fixture-task")
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(1)
+            client.connect(str(path))
+            client.sendall(json.dumps(request).encode() + b"\n")
+            return indicator.read_line(client, 4096)
+
+    def test_bound_phase_ack_precedes_short_action_and_release(self):
+        process = self.launch()
+        self.ready(process)
+        with self.actor_lock:
+            self.actor_state["active"] = {"task_id": "fixture-task"}
+            self.actor_state["actor_release_confirmed"] = False
+        start = time.monotonic()
+        self.assertTrue(self.phase_request(100)["ok"])
+        self.assertLess(time.monotonic() - start, 0.1)
+        self.assertFalse(self.phase_request(100)["ok"])
+        self.assertFalse(self.phase_request(101, scope_token="wrong")["ok"])
+        with self.actor_lock:
+            self.actor_state["active"] = None
+            self.actor_state["actor_release_confirmed"] = True
+        self.assertTrue(self.phase_request(102, "release")["ok"])
+        self.assertEqual(self.end_control().returncode, 0)
+        process.wait(timeout=2)
+
+    def test_missing_late_and_wrong_renderer_ack_are_rejected(self):
+        for mode in ("drop", "late", "wrong"):
+            with self.subTest(mode=mode):
+                self.env["FIXTURE_PHASE_MODE"] = mode
+                process = self.launch()
+                self.ready(process)
+                self.assertFalse(self.phase_request(200)["ok"])
+                self.assertEqual(self.end_control().returncode, 0)
+                process.wait(timeout=2)
+                self.renderer_log.unlink(missing_ok=True)
 
     def launch(self, task="fixture-task", extra=()):
         process = subprocess.Popen(
@@ -604,7 +653,7 @@ class IndicatorLifecycle(unittest.TestCase):
         self.assertEqual(len(self.actor_requests), 2)
 
     def test_non_timeout_failures_never_retry_or_fallback(self):
-        for plan in ({"eof":True}, {"raw":b"not-json\n"}, {"envelope":{"isError":True}}, {"status":{"lifecycle_revision":1}}, {"status":{"complete":False}}, {"status":{"actor_active":None}}):
+        for plan in ({"eof":True}, {"raw":b"not-json\n"}, {"envelope":{"isError":True}}, {"status":{"lifecycle_revision":1}}, {"status":{"lifecycle_revision":3}}, {"status":{"complete":False}}, {"status":{"actor_active":None}}):
             with self.subTest(plan=plan):
                 self.actor_plan = {1:plan}
                 self.actor_requests.clear()

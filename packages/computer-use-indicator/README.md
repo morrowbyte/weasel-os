@@ -13,10 +13,12 @@ workspace. They target one explicitly selected output, including full-screen
 windows. The intended live target on this laptop is `DP-6`; the user's T3 monitor
 is not automatically selected.
 
-The label also reports the last sampled lifecycle phase: active, queued, or
-waiting with confirmed release. Sampling is asynchronous (normally 100 ms), so
-it can lag or miss a short action. It is not a real-time input exclusion or
-permission signal; the actor still validates input and human activity itself.
+The label reports active, queued, or waiting. Before a scoped actor dispatch,
+the helper must receive a matching renderer acknowledgement for the active
+transition. The actor binds it to its session, task, epoch and transition; a
+timeout or mismatch prevents dispatch. The helper keeps the active phase until
+the actor confirms release, then returns to sampled lifecycle status. The actor
+still validates human input and all other action guards.
 
 This implementation needs live Niri validation. Successful compilation, fixture
 tests and the renderer's `ready` event do not prove visible edges, click-through,
@@ -112,7 +114,7 @@ to `run --scope-token` with that exact task ID. Ordinary new tasks may omit the
 option and the helper creates a fresh token. Each `desktop_act` call must carry
 the indicator's exact task ID; multiple batches within that scope remain
 allowed. The helper reads the actor's internal
-`desktop_indicator_lifecycle` contract, revision 3 with `complete=true`:
+`desktop_indicator_lifecycle` contract, revision 4 with `complete=true`:
 session, cancellation epoch, task ID and owner token, takeover latch, active
 flag, task-scope state, queue count and confirmed release. Begin, status and end
 are bound to the exact session/epoch/token tuple; an uncertain begin ACK still
