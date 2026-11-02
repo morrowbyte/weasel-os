@@ -1575,3 +1575,5 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 
 - Updated existing configured sources: packages/chatgpt/default.nix, packages/t3code/source.json, packages/tuios-bin.nix.
 - Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
+
+- 2026-11-02: Preserve the already effective official T3 Nightly MIME registration as exact generated baseline (com.t3tools.T3Code.desktop; installed4016); origin of app-generated write is not attributed. Backed up original bytes/diff, checked xdg-mime and both launcher identities; no app launch or default rewrite.
