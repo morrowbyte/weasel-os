@@ -1582,3 +1582,5 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 
 - Updated existing configured sources: flake.lock, packages/t3code/source.json.
 - Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
+
+- 2026-11-03: Preserve the already effective Crew t3code URL registration (com.evilweasel.T3Code.desktop) exactly; normal persistent launcher/profile confirmed, no default or launcher change. Original MIME bytes/diff retained privately. Normal signed hook and unchanged affected-host evaluation required; writer provenance not attributed.
