@@ -27,6 +27,21 @@ spec.loader.exec_module(indicator)
 
 
 class StatusDeadline(unittest.TestCase):
+    def test_observation_state_never_infers_privacy_from_missing_fields(self):
+        self.assertEqual(indicator.observation_state({}), ("unknown", False))
+        self.assertEqual(indicator.observation_state({"observation_mode": "enabled", "observation_active": False}), ("enabled", False))
+        self.assertEqual(indicator.observation_state({"observation_mode": "enabled", "observation_active": True}), ("enabled", True))
+        self.assertEqual(indicator.observation_state({"observation_mode": "disabled", "observation_active": False}), ("disabled", False))
+        for value in (
+            {"observation_mode": "disabled", "observation_active": True},
+            {"observation_mode": "disabled"},
+            {"observation_active": False},
+            {"observation_mode": "enabled", "observation_active": "false"},
+            {"observation_mode": "private", "observation_active": False},
+        ):
+            with self.subTest(value=value), self.assertRaises(indicator.CapabilityError):
+                indicator.observation_state(value)
+
     @unittest.skipUnless(os.environ.get("WEASEL_FRAME_TEST") == "1", "requires isolated GTK display")
     def test_renderer_ack_follows_real_gtk_draw_and_invalidates_old_transitions(self):
         source = r'''
@@ -134,6 +149,8 @@ class IndicatorLifecycle(unittest.TestCase):
             "takeover_latched": False, "active": None,
             "queued_batches": 0, "actor_release_confirmed": True,
             "task_scope_active": False,
+            "observation_mode": "enabled", "observation_active": False,
+            "observation_generation": 1,
         }
         self.task_scopes = {}
         self.actor_events = []
@@ -141,6 +158,7 @@ class IndicatorLifecycle(unittest.TestCase):
         self.supports_owner_lifetime = True
         self.actor_lock = threading.Lock()
         self.receipt_runs = []
+        self.stdout_prefix = {}
         self.control_requests = []
         self.actor_plan = {}
         self.actor_requests = []
@@ -324,6 +342,34 @@ class IndicatorLifecycle(unittest.TestCase):
         self.assertEqual(self.end_control().returncode, 0)
         process.wait(timeout=2)
 
+    def test_privacy_transitions_use_only_confirmed_policy_without_payload_echo(self):
+        with self.actor_lock:
+            self.actor_state["last_result"] = {"text": "SYNTHETIC-PRIVATE-CONTENT-42"}
+        process = self.launch(extra=("--activity", "Einstellungen prüfen"))
+        self.ready(process)
+
+        def wait_policy(line):
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                if line in [item["line"] for item in self.protocol()]:
+                    return
+                time.sleep(0.01)
+            self.fail("confirmed policy was not rendered: " + line)
+
+        wait_policy("v1 observation enabled idle")
+        with self.actor_lock:
+            self.actor_state["observation_active"] = True
+        wait_policy("v1 observation enabled active")
+        with self.actor_lock:
+            self.actor_state["observation_active"] = False
+            self.actor_state["observation_mode"] = "disabled"
+            self.actor_state["observation_generation"] = 2
+        wait_policy("v1 observation disabled idle")
+        self.assertNotIn("SYNTHETIC-PRIVATE-CONTENT-42", self.renderer_log.read_text())
+        self.assertFalse(any(item["arguments"].get("event") == "end" for item in self.actor_events))
+        self.assertEqual(self.end_control().returncode, 0)
+        process.wait(timeout=2)
+
     def test_phase_tracks_actor_and_queue_without_ending_scope(self):
         process = self.launch()
         self.ready(process)
@@ -362,7 +408,8 @@ class IndicatorLifecycle(unittest.TestCase):
         begin = next(item["arguments"] for item in self.actor_events if item["arguments"].get("event") == "begin")
         request = {"revision": 1, "event": "phase", "task_id": "fixture-task",
                    "session_id": "fixture-session", "epoch": 2,
-                   "scope_token": begin["scope_token"], "transition": transition, "phase": phase}
+                   "scope_token": begin["scope_token"], "transition": transition, "phase": phase,
+                   "observation_mode": "enabled", "observation_generation": 1}
         request.update(overrides)
         with patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(self.runtime)}):
             path, _ = indicator.task_paths("fixture-task")
@@ -371,6 +418,23 @@ class IndicatorLifecycle(unittest.TestCase):
             client.connect(str(path))
             client.sendall(json.dumps(request).encode() + b"\n")
             return indicator.read_line(client, 4096)
+
+    def test_observing_ack_clears_private_label_and_ignores_old_poll_generation(self):
+        self.actor_state.update(observation_mode="disabled", observation_generation=2)
+        process = self.launch()
+        self.ready(process)
+        self.assertTrue(self.phase_request(50, "observing", observation_generation=3)["ok"])
+        lines = [item["line"] for item in self.protocol()]
+        enabled = max(index for index, line in enumerate(lines) if line == "v1 observation enabled idle")
+        observing = lines.index("v1 phase observing 50")
+        self.assertLess(enabled, observing)
+        time.sleep(0.2)  # permit a stale generation-2 lifecycle response
+        lines = [item["line"] for item in self.protocol()]
+        self.assertNotIn("v1 observation disabled idle", lines[enabled + 1:])
+        self.assertFalse(self.phase_request(51, "active", observation_generation=2)["ok"])
+        self.assertTrue(self.phase_request(52, "release", observation_generation=3)["ok"])
+        self.assertEqual(self.end_control().returncode, 0)
+        process.wait(timeout=2)
 
     def test_bound_phase_ack_precedes_short_action_and_release(self):
         process = self.launch()
@@ -412,17 +476,27 @@ class IndicatorLifecycle(unittest.TestCase):
 
     def ready(self, process):
         deadline = time.monotonic() + 2
+        pending = bytearray()
         while time.monotonic() < deadline:
             if select.select([process.stdout], [], [], 0.1)[0]:
-                line = process.stdout.readline()
-                if line and json.loads(line).get("event") == "ready":
-                    return
+                chunk = os.read(process.stdout.fileno(), 4096)
+                self.stdout_prefix[process.pid] = self.stdout_prefix.get(process.pid, b"") + chunk
+                pending.extend(chunk)
+                # TextIO.readline can prefetch the ready event behind starting;
+                # select then waits on an empty fd despite buffered data. Read
+                # each available byte once and retain it for the final receipt.
+                while b"\n" in pending:
+                    line, _, tail = pending.partition(b"\n")
+                    pending[:] = tail
+                    if line and json.loads(line).get("event") == "ready":
+                        return
             if process.poll() is not None:
                 break
         self.fail("fixture indicator was not ready")
 
     def ended(self, process):
         stdout, stderr = process.communicate(timeout=2)
+        stdout = self.stdout_prefix.pop(process.pid, b"").decode() + stdout
         events = [json.loads(line) for line in stdout.splitlines()]
         ended = next(item for item in reversed(events) if item.get("event") == "ended")
         self.assertEqual(stderr, "")
@@ -553,7 +627,7 @@ class IndicatorLifecycle(unittest.TestCase):
         self.ready(process)
         lease = next((self.actor_dir / "indicators").glob("task-*.json"))
         data = json.loads(lease.read_text())
-        self.assertEqual(data["deadline_monotonic"] - data["started_monotonic"], 3600)
+        self.assertAlmostEqual(data["deadline_monotonic"] - data["started_monotonic"], 3600, places=6)
         result = subprocess.run([sys.executable, str(SOURCE / "indicator.py"), "end", "--task-id", "fixture-task"], env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(self.ended(process)["reason"], "explicit_end")
@@ -728,7 +802,8 @@ class IndicatorLifecycle(unittest.TestCase):
                 self.actor_plan = {1:plan}
                 self.actor_requests.clear()
                 process = self.launch()
-                self.ready(process)
+                # An invalid first live reply can race renderer readiness. Both
+                # orders must end without retry; READY is not a prerequisite.
                 self.assertEqual(self.ended(process)["reason"], "capability_unavailable")
                 self.assertEqual(len(self.actor_requests), 2)
                 self.assertFalse(any(x["event"] == "lifecycle_timeout" for x in self.last_events))

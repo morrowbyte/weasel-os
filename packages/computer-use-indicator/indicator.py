@@ -120,6 +120,9 @@ def parse_lifecycle(result):
         raise CapabilityError("actor lifecycle counters unavailable")
     if any(type(status.get(key)) is not bool for key in ("takeover_latched", "actor_active", "actor_release_confirmed", "task_scope_active")):
         raise CapabilityError("actor lifecycle cancellation/release unavailable")
+    # Older actors cannot attest privacy. Never turn a missing field into a
+    # disabled/read-free claim; the renderer explicitly shows it as unverified.
+    observation_state(status)
     return status
 
 
@@ -284,11 +287,39 @@ def valid_activity(value):
 
 
 def activity_phase(status):
+    if status.get("observation_active") is True:
+        return "observing"
     if status["actor_active"]:
         return "active"
     if status["queued_batches"]:
         return "queued"
     return "waiting"
+
+
+def observation_state(status):
+    mode = status.get("observation_mode", "unknown")
+    active = status.get("observation_active", False)
+    if mode not in ("enabled", "disabled", "unknown") or type(active) is not bool:
+        raise CapabilityError("actor observation policy malformed")
+    if active and mode != "enabled":
+        raise CapabilityError("actor observation policy contradicts active read")
+    if ("observation_mode" in status) != ("observation_active" in status):
+        raise CapabilityError("actor observation policy incomplete")
+    return mode, active
+
+
+def observation_generation(status):
+    generation = status.get("observation_generation", -1)
+    if type(generation) is not int or generation < -1:
+        raise CapabilityError("actor observation generation malformed")
+    return generation
+
+
+def render_observation(renderer, status):
+    mode, active = observation_state(status)
+    renderer.stdin.write(f"v1 observation {mode} {'active' if active else 'idle'}\n")
+    renderer.stdin.flush()
+    return mode, active
 
 
 def control(args):
@@ -386,6 +417,8 @@ def run(args):
         ], task_socket)
         if registered.get("task_scope_lifetime") != "owner_process":
             raise CapabilityError("actor does not support owner-bound task scope lifetime")
+        privacy = render_observation(renderer, registered)
+        privacy_generation = observation_generation(registered)
         renderer.stdin.write("v1 begin\n")
         renderer.stdin.flush()
         emit("starting", task_id=args.task_id, output=args.output, pid=os.getpid(), geometry=geometry)
@@ -440,17 +473,27 @@ def run(args):
                             if event == "phase":
                                 transition = request.get("transition")
                                 requested_phase = request.get("phase")
+                                request_mode = request.get("observation_mode", "unknown")
+                                request_generation = observation_generation(request)
                                 valid = (valid and ready and request.get("session_id") == initial["session_id"]
                                          and request.get("epoch") == initial["epoch"]
                                          and request.get("scope_token") == scope_token
                                          and type(transition) is int and transition > last_transition
-                                         and requested_phase in ("active", "release"))
+                                         and requested_phase in ("active", "observing", "release")
+                                         and request_mode in ("enabled", "disabled", "unknown")
+                                         and request_generation >= privacy_generation
+                                         and (requested_phase != "observing" or request_mode == "enabled"))
                                 applied = False
                                 if valid:
                                     last_transition = transition
-                                    if requested_phase == "active":
+                                    # This barrier clears an older private label before any
+                                    # observing ACK; stale pending poll replies cannot undo it.
+                                    privacy_generation = request_generation
+                                    privacy = render_observation(renderer, {
+                                        "observation_mode": request_mode, "observation_active": False})
+                                    if requested_phase in ("active", "observing"):
                                         phase_busy = True
-                                    render_phase = "active" if requested_phase == "active" else "unknown"
+                                    render_phase = requested_phase if requested_phase != "release" else "unknown"
                                     renderer.stdin.write(f"v1 phase {render_phase} {transition}\n")
                                     renderer.stdin.flush()
                                     until = time.monotonic() + STATUS_TIMEOUT_SECONDS
@@ -560,6 +603,7 @@ def run(args):
                     renderer.stdin.write("v1 phase unknown\n")
                     renderer.stdin.flush()
                     phase = None
+                privacy = render_observation(renderer, {})
                 if isinstance(probe_error, LifecycleTimeout) and timeout_retry == 0:
                     timeout_retry = 1
                     next_poll = now
@@ -575,6 +619,10 @@ def run(args):
                 last_valid_at = now
                 timeout_retry = 0
                 next_poll = now + POLL_SECONDS
+                if observation_generation(fresh_status) >= privacy_generation:
+                    privacy_generation = observation_generation(fresh_status)
+                    if observation_state(fresh_status) != privacy:
+                        privacy = render_observation(renderer, fresh_status)
                 new_phase = activity_phase(fresh_status)
                 if not phase_busy and new_phase != phase:
                     renderer.stdin.write("v1 phase " + new_phase + "\n")

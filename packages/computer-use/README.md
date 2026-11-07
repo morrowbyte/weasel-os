@@ -2,6 +2,78 @@
 
 A persistent Rust desktop actor and stdio MCP bridge for the actual Wayland session.
 
+## Explicit observation mode and short batches
+
+`desktop_set_observation_mode({"mode":"disabled"})` turns the actor's desktop
+observation off. `{"mode":"enabled"}` explicitly permits it again. No action
+changes this setting automatically. This is a deliberate look-away control, not
+secret detection, a credential store, or a restriction on separately authorized
+private-store references and direct process injection outside these desktop
+observation paths.
+
+Both `desktop_status` and the small `desktop_indicator_lifecycle` response expose:
+
+| Field | Meaning |
+| --- | --- |
+| `observation_mode` | `enabled` or `disabled`; permission, not current activity |
+| `observation_active` | `true` only during real content acquisition |
+| `observation_generation` | Monotonic policy generation; invalidates old targets |
+
+The global cancellation epoch and the live indicator task survive a mode change.
+The change drains existing acquisition and response-delivery leases, clears image
+and semantic caches and `last_result`, and removes owned capture files, including
+orphans from failed captures. A repeated disable retries cleanup. While disabled,
+screen capture, visual guards, AT-SPI/Cua, full window inventories, image reads and
+post-action observation fail explicitly; an empty read is not reported as success.
+Before acquisition, a bound `indicator_phase` request carries `phase:"observing"`,
+`observation_mode` and `observation_generation` and requires the existing paint
+ACK. It does not artificially set `observation_active`. Input/release phases also
+carry the policy fields so stale lifecycle polls cannot overwrite a newer mode.
+
+The current MCP and CLI proxies keep the daemon's policy read lease until their
+public response is flushed or their output path is permanently closed. A mode
+change cannot overtake an old buffered response. Old proxies without this
+delivery handshake are refused before content acquisition. Previously delivered
+data cannot be recalled; an output consumer that stops draining can keep a mode
+change pending. The setting is session-local and defaults to `enabled` on daemon
+startup, independently of the existing startup input/takeover gate.
+
+While disabled, `desktop_blind_target` accepts `task_id`, `window_id`,
+`expected_session_id` and `expected_epoch`. It requires the exact already-focused
+window, live task and released input, returns an `observation_id` valid for ten
+seconds, and binds it to that task and policy generation. Its fresh Niri checks
+deserialize only structural window/workspace fields, skipping titles, workspace
+names and unknown content; no screen/AT-SPI/clipboard content is requested.
+`desktop_act` with that token must explicitly set both `observe_after:false` and
+`include_image:false`. Its private allowlist is:
+
+- `type` with `text_method:"keyboard"`, 1–256 printable ASCII bytes or spaces;
+- single Tab, Return/Enter, arrow, Home/End, Backspace/Delete;
+- Ctrl+A, Ctrl+L, Ctrl+S, or Shift+Tab, with app key scope;
+- `wait` of at most 250 ms.
+
+Auto typing, clipboard typing/paste and clipboard shortcuts, pointer actions,
+semantic actions, focus, close and launch are refused before any earlier batch
+effect. Task/session/epoch, fresh target, physical input, Stop, timeout and owned
+release gates remain in force. Private action responses never echo typed text,
+helper output or an old observation. They acknowledge input only; they cannot
+verify a private screen's resulting content.
+
+All batches contain at most four actions and at most one pointer action. Private
+batches have an eight-second maximum deadline. In enabled mode, the existing
+default `observe_after:true` returns a fresh `after_observation` and image in the
+same response; use and inspect that observation instead of automatically adding
+another `desktop_observe`. If an intermediate action changes later targets,
+obtain fresh evidence instead of extending a blind click chain.
+
+`cargo test --locked privacy_tests -- --nocapture` exercises the focused policy,
+cache, default-post-observe, structural decoding, task-binding and delivery
+regressions without desktop input. Its transport fixture compares the identical
+Ctrl+L / type URL / Return request sequence as three separate socket RPCs and one
+three-action RPC, asserting two saved roundtrips. That is a transport count, not
+a GUI speedup or measured desktop latency; run and retain the test output on the
+authorized Boat host before claiming the result.
+
 When the live tool schema exposes `close_window`, a caller can request closure
 of one freshly observed, focused, task-owned window by its explicit Niri ID.
 It is a standalone action with matching top-level and action IDs. Prove safe

@@ -24,7 +24,11 @@ static char *output_name, *task_id;
 static const char *activity = "Computer Use";
 static GtkWidget *activity_label;
 static GtkWidget *phase_label;
+static GtkWidget *privacy_label;
+static const char *observation_mode = "unknown";
+static gboolean observation_active;
 static gboolean phase_ack_pending;
+static gboolean phase_draw_complete, privacy_paint_pending;
 static unsigned long long phase_ack_transition;
 static char phase_ack_name[16];
 static gint64 last_heartbeat;
@@ -33,6 +37,52 @@ static gboolean target_valid = TRUE;
 static unsigned mapped;
 static char pending[MAX_LINE];
 static size_t pending_len;
+static void acknowledge_phase(void);
+
+static const char *phase_text(const char *name) {
+    if (!strcmp(name, "active")) return "Führt aus";
+    if (!strcmp(name, "observing")) return "Liest Bildschirm";
+    if (!strcmp(name, "queued")) return "In Warteschlange";
+    if (!strcmp(name, "waiting")) return "Wartet";
+    return "Status unklar";
+}
+
+static void update_privacy(void) {
+    if (!privacy_label) return;
+    const char *text = !strcmp(observation_mode, "disabled") ? "Blick aus · Keine Bild-/Textauslese" :
+        !strcmp(observation_mode, "enabled") ? (observation_active ? "Bildschirm wird gelesen" : "Bildschirmzugriff erlaubt") :
+        "Bildschirmzugriff ungeprüft";
+    if (strcmp(gtk_label_get_text(GTK_LABEL(privacy_label)), text)) {
+        privacy_paint_pending = TRUE;
+        gtk_label_set_text(GTK_LABEL(privacy_label), text);
+    }
+    GtkStyleContext *style = gtk_widget_get_style_context(privacy_label);
+    gtk_style_context_remove_class(style, "private");
+    gtk_style_context_remove_class(style, "reading");
+    if (!strcmp(observation_mode, "disabled")) gtk_style_context_add_class(style, "private");
+    else if (observation_active) gtk_style_context_add_class(style, "reading");
+}
+
+/* Alpha gradients soften the edge without sampling desktop pixels. No blur
+ * capture, animation, tick callback or full-output framebuffer is needed. */
+static gboolean edge_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
+    unsigned side = GPOINTER_TO_UINT(data);
+    int width = gtk_widget_get_allocated_width(widget);
+    int height = gtk_widget_get_allocated_height(widget);
+    double extent = side < 2 ? width : height;
+    cairo_pattern_t *gradient = cairo_pattern_create_linear(
+        side == 1 ? extent : 0, side == 3 ? extent : 0,
+        side == 0 ? extent : 0, side == 2 ? extent : 0);
+    cairo_pattern_add_color_stop_rgba(gradient, 0.0, 0.74, 0.83, 1.0, 0.62);
+    cairo_pattern_add_color_stop_rgba(gradient, 0.08, 0.52, 0.66, 1.0, 0.32);
+    cairo_pattern_add_color_stop_rgba(gradient, 0.32, 0.55, 0.50, 0.94, 0.14);
+    cairo_pattern_add_color_stop_rgba(gradient, 1.0, 0.55, 0.50, 0.94, 0.0);
+    cairo_set_source(cr, gradient);
+    cairo_rectangle(cr, 0, 0, width, height);
+    cairo_fill(cr);
+    cairo_pattern_destroy(gradient);
+    return FALSE;
+}
 
 static void finish(const char *reason) {
     if (stopped) return;
@@ -81,13 +131,24 @@ static gboolean phase_painted(GtkWidget *widget, cairo_t *cr, gpointer unused) {
         phase_ack_pending = FALSE;
         return FALSE;
     }
-    const char *expected_text = !strcmp(phase_ack_name, "active") ? "Aktion läuft" :
-        !strcmp(phase_ack_name, "unknown") ? "Status wird geprüft" :
-        !strcmp(phase_ack_name, "queued") ? "Aktion wartet" : "Wartet · zuletzt frei";
+    const char *expected_text = phase_text(phase_ack_name);
     if (strcmp(gtk_label_get_text(GTK_LABEL(widget)), expected_text)) return FALSE;
+    phase_draw_complete = TRUE;
+    acknowledge_phase();
+    return FALSE;
+}
+
+static void acknowledge_phase(void) {
+    if (!phase_ack_pending || !phase_draw_complete || privacy_paint_pending || stopped) return;
     phase_ack_pending = FALSE;
     printf("{\"revision\":1,\"event\":\"phase_applied\",\"task_id\":\"%s\",\"phase\":\"%s\",\"transition\":%llu}\n", task_id, phase_ack_name, phase_ack_transition);
     fflush(stdout);
+}
+
+static gboolean privacy_painted(GtkWidget *widget, cairo_t *cr, gpointer unused) {
+    (void)widget; (void)cr; (void)unused;
+    privacy_paint_pending = FALSE;
+    acknowledge_phase();
     return FALSE;
 }
 
@@ -98,6 +159,8 @@ static GtkWidget *surface(int width, int height, gboolean left, gboolean right,
     gtk_window_set_accept_focus(GTK_WINDOW(window), FALSE);
     gtk_window_set_focus_on_map(GTK_WINDOW(window), FALSE);
     gtk_widget_set_can_focus(window, FALSE);
+    GdkVisual *visual = gdk_screen_get_rgba_visual(gtk_widget_get_screen(window));
+    if (visual) gtk_widget_set_visual(window, visual);
     gtk_widget_set_name(window, label ? "computer-use-label" : "computer-use-edge");
     gtk_widget_set_size_request(window, width, height);
     gtk_layer_init_for_window(GTK_WINDOW(window));
@@ -112,27 +175,44 @@ static GtkWidget *surface(int width, int height, gboolean left, gboolean right,
     gtk_layer_set_anchor(GTK_WINDOW(window), GTK_LAYER_SHELL_EDGE_TOP, top);
     gtk_layer_set_anchor(GTK_WINDOW(window), GTK_LAYER_SHELL_EDGE_BOTTOM, bottom);
     if (label) {
-        GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 14);
-        gtk_widget_set_margin_start(box, 16);
-        gtk_widget_set_margin_end(box, 16);
-        gtk_widget_set_margin_top(box, 8);
-        gtk_widget_set_margin_bottom(box, 8);
+        gboolean narrow = expected.width < 650;
+        GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
+        GtkWidget *heading = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+        GtkWidget *status = gtk_box_new(narrow ? GTK_ORIENTATION_VERTICAL : GTK_ORIENTATION_HORIZONTAL, narrow ? 4 : 12);
+        gtk_widget_set_margin_start(box, 18);
+        gtk_widget_set_margin_end(box, 18);
+        gtk_widget_set_margin_top(box, 12);
+        gtk_widget_set_margin_bottom(box, 12);
         GtkWidget *text = gtk_label_new(activity);
         activity_label = text;
-        phase_label = gtk_label_new("Status wird geprüft");
+        gtk_widget_set_name(text, "current-activity");
+        phase_label = gtk_label_new(phase_text("unknown"));
+        gtk_widget_set_name(phase_label, "current-phase");
         g_signal_connect_after(phase_label, "draw", G_CALLBACK(phase_painted), NULL);
         gtk_label_set_ellipsize(GTK_LABEL(text), PANGO_ELLIPSIZE_END);
-        gtk_label_set_width_chars(GTK_LABEL(text), 30);
-        gtk_label_set_max_width_chars(GTK_LABEL(text), 55);
+        gtk_label_set_width_chars(GTK_LABEL(text), narrow ? 12 : 24);
+        gtk_label_set_max_width_chars(GTK_LABEL(text), narrow ? 22 : 46);
         gtk_label_set_xalign(GTK_LABEL(text), 0.0f);
-        GtkWidget *shortcut = gtk_label_new("Alt + Esc  ·  Abbrechen");
+        gtk_label_set_xalign(GTK_LABEL(phase_label), 1.0f);
+        privacy_label = gtk_label_new(NULL);
+        g_signal_connect_after(privacy_label, "draw", G_CALLBACK(privacy_painted), NULL);
+        gtk_widget_set_name(privacy_label, "privacy-state");
+        gtk_label_set_xalign(GTK_LABEL(privacy_label), 0.0f);
+        gtk_label_set_ellipsize(GTK_LABEL(privacy_label), PANGO_ELLIPSIZE_END);
+        gtk_label_set_max_width_chars(GTK_LABEL(privacy_label), narrow ? 34 : 48);
+        update_privacy();
+        GtkWidget *shortcut = gtk_label_new("Alt + Esc · Stopp");
         gtk_widget_set_name(shortcut, "abort-shortcut");
+        gtk_label_set_xalign(GTK_LABEL(shortcut), narrow ? 0.0f : 1.0f);
         gtk_widget_set_can_focus(text, FALSE);
-        gtk_box_pack_start(GTK_BOX(box), phase_label, FALSE, FALSE, 0);
-        gtk_box_pack_start(GTK_BOX(box), text, TRUE, TRUE, 0);
-        gtk_box_pack_end(GTK_BOX(box), shortcut, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(heading), text, TRUE, TRUE, 0);
+        gtk_box_pack_end(GTK_BOX(heading), phase_label, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(status), privacy_label, TRUE, TRUE, 0);
+        gtk_box_pack_end(GTK_BOX(status), shortcut, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(box), heading, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(box), status, FALSE, FALSE, 0);
         gtk_container_add(GTK_CONTAINER(window), box);
-        gtk_layer_set_margin(GTK_WINDOW(window), GTK_LAYER_SHELL_EDGE_TOP, 12);
+        gtk_layer_set_margin(GTK_WINDOW(window), GTK_LAYER_SHELL_EDGE_TOP, 18);
     }
     g_signal_connect(window, "realize", G_CALLBACK(click_through), NULL);
     g_signal_connect(window, "map", G_CALLBACK(surface_mapped), NULL);
@@ -154,18 +234,29 @@ static void process_line(const char *line) {
         char extra;
         int fields = sscanf(value, "%15s %llu %c", name, &transition, &extra);
         phase_ack_pending = FALSE;
+        phase_draw_complete = FALSE;
         if (fields != 1 && fields != 2) { finish("invalid_phase"); return; }
-        if (!strcmp(name, "unknown")) gtk_label_set_text(GTK_LABEL(phase_label), "Status wird geprüft");
-        else if (!strcmp(name, "active")) gtk_label_set_text(GTK_LABEL(phase_label), "Aktion läuft");
-        else if (!strcmp(name, "queued")) gtk_label_set_text(GTK_LABEL(phase_label), "Aktion wartet");
-        else if (!strcmp(name, "waiting")) gtk_label_set_text(GTK_LABEL(phase_label), "Wartet · zuletzt frei");
-        else finish("invalid_phase");
+        if (strcmp(name, "unknown") && strcmp(name, "active") && strcmp(name, "observing") &&
+            strcmp(name, "queued") && strcmp(name, "waiting")) finish("invalid_phase");
+        else gtk_label_set_text(GTK_LABEL(phase_label), phase_text(name));
         if (!stopped && fields == 2) {
             phase_ack_transition = transition;
             snprintf(phase_ack_name, sizeof phase_ack_name, "%s", name);
             phase_ack_pending = TRUE;
             gtk_widget_queue_draw(phase_label);
         }
+    } else if (!strncmp(line, "v1 observation ", 15)) {
+        char mode[16], state[16], extra;
+        if (sscanf(line + 15, "%15s %15s %c", mode, state, &extra) != 2 ||
+            (strcmp(mode, "enabled") && strcmp(mode, "disabled") && strcmp(mode, "unknown")) ||
+            (strcmp(state, "active") && strcmp(state, "idle")) ||
+            (!strcmp(state, "active") && strcmp(mode, "enabled"))) {
+            finish("invalid_observation");
+            return;
+        }
+        observation_mode = !strcmp(mode, "enabled") ? "enabled" : !strcmp(mode, "disabled") ? "disabled" : "unknown";
+        observation_active = !strcmp(state, "active");
+        update_privacy();
     } else if (!strncmp(line, "v1 activity ", 12) && begun) {
         const char *value = line + 12;
         if (!*value || !g_utf8_validate(value, -1, NULL) || g_utf8_strlen(value, -1) > 120) {
@@ -283,21 +374,28 @@ int main(int argc, char **argv) {
     g_signal_connect(display, "monitor-removed", G_CALLBACK(monitor_removed), NULL);
     GtkCssProvider *css = gtk_css_provider_new();
     const char *style =
-        "#computer-use-edge { background: #2788ff; min-width: 0; min-height: 0; padding: 0; margin: 0; border: none; }"
-        "#computer-use-label { background: #16243a; color: white; border: 1px solid #4698ff; border-radius: 16px; padding: 10px 18px; margin: 0; }"
-        "#computer-use-label label { color: white; font: 500 14px sans-serif; }"
-        "#abort-shortcut { color: #b8d8ff; font: 600 12px sans-serif; }";
+        "#computer-use-edge { background: transparent; min-width: 0; min-height: 0; padding: 0; margin: 0; border: none; }"
+        "#computer-use-label { background: linear-gradient(130deg, rgba(31,35,49,0.95), rgba(20,26,38,0.93)); color: white; border: 1px solid rgba(214,226,255,0.28); border-radius: 18px; padding: 0; margin: 0; box-shadow: 0 3px 12px rgba(0,0,0,0.25); }"
+        "#computer-use-label label { color: #f5f7ff; font: 500 12px sans-serif; }"
+        "#computer-use-label #current-activity { font: 600 14px sans-serif; }"
+        "#computer-use-label #current-phase { color: #c9d5ff; font: 600 11px sans-serif; }"
+        "#computer-use-label #privacy-state { color: #d2d9eb; font: 500 11px sans-serif; }"
+        "#computer-use-label #privacy-state.private { color: #aaf1d7; }"
+        "#computer-use-label #privacy-state.reading { color: #ffe0a1; }"
+        "#computer-use-label #abort-shortcut { color: #bdc6dc; font: 500 11px sans-serif; }";
     GError *error = NULL;
     if (!gtk_css_provider_load_from_data(css, style, -1, &error)) {
         fprintf(stderr, "Indicator style invalid\n"); return 5;
     }
     gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(css),
                                              GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-    surfaces[0] = surface(4, -1, TRUE, FALSE, TRUE, TRUE, FALSE);
-    surfaces[1] = surface(4, -1, FALSE, TRUE, TRUE, TRUE, FALSE);
-    surfaces[2] = surface(-1, 4, TRUE, TRUE, TRUE, FALSE, FALSE);
-    surfaces[3] = surface(-1, 4, TRUE, TRUE, FALSE, TRUE, FALSE);
+    surfaces[0] = surface(22, -1, TRUE, FALSE, TRUE, TRUE, FALSE);
+    surfaces[1] = surface(22, -1, FALSE, TRUE, TRUE, TRUE, FALSE);
+    surfaces[2] = surface(-1, 22, TRUE, TRUE, TRUE, FALSE, FALSE);
+    surfaces[3] = surface(-1, 22, TRUE, TRUE, FALSE, TRUE, FALSE);
     surfaces[4] = surface(-1, -1, FALSE, FALSE, TRUE, FALSE, TRUE);
+    for (unsigned i = 0; i < 4; i++)
+        g_signal_connect(surfaces[i], "draw", G_CALLBACK(edge_draw), GUINT_TO_POINTER(i));
     last_heartbeat = g_get_monotonic_time();
     if (fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK) < 0) return 6;
     g_unix_fd_add(STDIN_FILENO, G_IO_IN | G_IO_HUP | G_IO_ERR | G_IO_NVAL, input_ready, NULL);

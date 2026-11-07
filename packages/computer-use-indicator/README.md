@@ -6,14 +6,21 @@ accessibility, focus, input, model, API or credential code. The Python standard
 library helper owns its lifetime and reads actor status. GTK is isolated here so
 the Rust capture/input core does not gain a GTK dependency or another Cargo tree.
 
-The indicator has four solid blue 4-logical-pixel edge surfaces and a compact top
-label: a concise current activity and **Alt + Esc · Abbrechen**. All five surfaces request the overlay
+The indicator has four soft transparent 22-logical-pixel edge surfaces and a compact
+glass-style top island: a concise current activity, real phase, confirmed observation
+policy and **Alt + Esc · Stopp**. The edge is a static alpha gradient, not a sampled
+backdrop blur: it never reads the desktop and requires no continuous animation.
+The island adapts to narrow outputs; activity text is ellipsized and rendered as
+literal text. All five surfaces request the overlay
 layer, explicitly disable keyboard focus, use empty input regions, and reserve no
 workspace. They target one explicitly selected output, including full-screen
 windows. The intended live target on this laptop is `DP-6`; the user's T3 monitor
 is not automatically selected.
 
-The label reports active, queued, or waiting. Before a scoped actor dispatch,
+The label reports executing, observing, queued, waiting, or unknown. No hidden
+model reasoning or action text is displayed. The authored activity must describe
+the operation without input text, credentials or sensitive window titles.
+Before a scoped actor dispatch,
 the helper must receive a matching renderer acknowledgement for the active
 transition after the mapped GTK label's draw handler has painted it. This is
 GTK paint evidence, not proof of physical compositor presentation. The actor
@@ -78,7 +85,12 @@ v1 heartbeat
 v1 phase waiting
 v1 phase queued
 v1 phase active
+v1 phase observing
 v1 phase unknown
+v1 observation enabled idle
+v1 observation enabled active
+v1 observation disabled idle
+v1 observation unknown idle
 v1 activity <plain text>
 v1 end
 ```
@@ -150,6 +162,17 @@ Lifecycle and output queries are read-only. Raw status, window titles,
 environment, command arguments and credentials are never logged. The helper's
 termination and the renderer lease do not establish that the actor has released
 input: inspect fresh actor status independently after Stop/Escape.
+
+The optional "Blick aus" mode is deliberate looking away, not secret detection
+or a universal privacy guarantee. It does not block separately authorized
+private-store references or direct process injection through existing tools.
+The compact lifecycle carries `observation_mode` (`enabled` or `disabled`) and
+`observation_active` (actual content acquisition). Enabled means permission to
+read, not proof of a read. Disabled is shown as private only after the actor
+confirms it. Older actors without these fields show access as unverified; an
+incomplete or contradictory policy response is rejected. A lifecycle timeout
+immediately removes the privacy claim before the bounded retry. The helper
+forwards only these typed fields, never full status, action text or window names.
 
 ## Component verification
 
