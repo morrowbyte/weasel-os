@@ -81,6 +81,15 @@ enable observation automatically to recover a failed action. The indicator
 shows confirmed private access, permitted access, actual acquisition, or unknown
 status; unknown is not a privacy guarantee. Author only a brief safe activity
 such as "Formular ausfüllen", never the text being entered or a sensitive title.
+Set that activity to the concrete current intent before each meaningful change,
+such as "Notiz ergänzen und speichern". Do not leave a generic test title in a
+real workflow. The compact second line reports confirmed actor phases; it does
+not display hidden thoughts, typed values, paths or window titles.
+
+Before confirming Save As, observe the actual directory and filename rather
+than assuming keyboard focus stayed in the name field. Cancel an unexpected
+overwrite prompt. For test artifacts, use a freshly created task-owned directory
+and a verified unused filename, never an existing source-tree file.
 
 In disabled mode, obtain a fresh `desktop_blind_target` for the already-focused
 window with the live task/session/epoch binding. It is a short-lived structural

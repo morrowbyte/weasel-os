@@ -143,6 +143,75 @@ fn structural_decoders_discard_titles_names_and_unknown_content() {
 }
 
 #[test]
+fn structural_validation_preserves_guards_without_content_or_paint() {
+    const FLAG: &str = "WEASEL_STRUCTURAL_VALIDATION_CHILD";
+    if env::var(FLAG).as_deref() != Ok("1") {
+        let child = Command::new(env::current_exe().unwrap())
+            .args(["--exact", "privacy_tests::structural_validation_preserves_guards_without_content_or_paint", "--test-threads=1"])
+            .env(FLAG, "1").output().unwrap();
+        assert!(child.status.success(), "{}", String::from_utf8_lossy(&child.stdout));
+        return;
+    }
+    let (state, dir) = cooperative_fixture("structural-validation");
+    let bin = dir.join("bin");
+    private_dir(&bin).unwrap();
+    let shim = bin.join("niri");
+    fs::write(&shim, b"#!/bin/sh\nprintf '%s' \"$WEASEL_STRUCTURAL_JSON\"\nprintf '%s' \"$WEASEL_STRUCTURAL_STDERR\" >&2\nexit \"${WEASEL_STRUCTURAL_EXIT:-0}\"\n").unwrap();
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o700)).unwrap();
+    env::set_var("PATH", &bin);
+    env::set_var("WEASEL_STRUCTURAL_STDERR", SECRET);
+    let layout = json!({"pos_in_scrolling_layout":[1,2],"tile_pos_in_workspace_view":null,
+        "tile_size":[400.0,300.0],"window_offset_in_tile":[0.0,0.0],"window_size":[400,300]});
+    let target = json!({"id":1,"pid":42,"app_id":"editor","workspace_id":2,
+        "is_focused":true,"is_floating":false,"layout":layout,"title":SECRET,
+        "unknown":{"text":SECRET}});
+    env::set_var("WEASEL_STRUCTURAL_JSON", json!([target.clone()]).to_string());
+    scope(&state, "structural-test");
+    state.task_scopes.lock().unwrap().get_mut("structural-test").unwrap().indicator_socket =
+        Some(dir.join("must-not-open.sock"));
+    // A content acquisition would need this missing indicator ACK and fail.
+    let windows = niri_window_identities(&state, Some(77)).unwrap();
+    assert!(!windows.to_string().contains(SECRET));
+    assert_eq!(identity(&windows[0]), identity(&target));
+    assert!(!state.observation_policy.snapshot().active);
+    let mut captured = obs(&dir);
+    captured.focused_window = Some(target.clone());
+    validate(&state, &captured, Some(1), false).unwrap();
+    for (field, value) in [
+        ("id", json!(3)), ("pid", json!(43)), ("app_id", json!("other")),
+        ("workspace_id", json!(3)), ("is_focused", json!(false)),
+        ("is_floating", json!(true)),
+        ("layout", { let mut changed = layout.clone(); changed["tile_size"] = json!([401.0,300.0]); changed }),
+    ] {
+        let mut changed = target.clone(); changed[field] = value;
+        env::set_var("WEASEL_STRUCTURAL_JSON", json!([changed]).to_string());
+        assert!(validate(&state, &captured, Some(1), false).is_err(), "{field}");
+    }
+    let mut renamed = target.clone(); renamed["title"] = json!("Changed title");
+    env::set_var("WEASEL_STRUCTURAL_JSON", json!([renamed]).to_string());
+    validate(&state, &captured, Some(1), false).unwrap();
+    assert!(niri_epoch(&state, "windows", Some(77)).is_err(), "content still requires paint ACK");
+    env::set_var("WEASEL_STRUCTURAL_JSON", format!("[{{\"id\":\"{SECRET}\"}}]"));
+    let error = niri_window_identities(&state, Some(77)).unwrap_err();
+    assert!(!error.contains(SECRET));
+    env::set_var("WEASEL_STRUCTURAL_JSON", json!([target.clone()]).to_string());
+    env::set_var("WEASEL_STRUCTURAL_EXIT", "1");
+    assert!(!niri_window_identities(&state, Some(77)).unwrap_err().contains(SECRET));
+    env::set_var("WEASEL_STRUCTURAL_EXIT", "0");
+    state.input_policy.update_holds(1, true);
+    state.input_policy.update_holds(0, true);
+    assert!(validate(&state, &captured, Some(1), false).is_err());
+    captured.input_generation = state.input_policy.generation();
+    state.epoch.store(78, Ordering::SeqCst);
+    assert!(validate(&state, &captured, Some(1), false).is_err());
+    state.epoch.store(77, Ordering::SeqCst);
+    disable(&state);
+    assert!(validate(&state, &captured, Some(1), false).is_err());
+    assert!(!niri_window_identities(&state, Some(77)).unwrap().to_string().contains(SECRET));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn lifecycle_reports_real_acquisition_without_conflating_permission() {
     let (state, dir) = cooperative_fixture("privacy-active");
     assert_eq!(data(&handle(&state,"desktop_indicator_lifecycle",&json!({}),77).unwrap())["observation_active"], false);

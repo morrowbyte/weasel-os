@@ -416,6 +416,21 @@ struct StructuralWindow {
     workspace_id: Option<u64>,
     is_focused: bool,
     is_floating: bool,
+    layout: Option<StructuralLayout>,
+}
+// Preserve every geometry field used by identity(), including the original
+// JSON number representation. Unknown future layout fields fail closed rather
+// than silently weakening the retained-observation comparison.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StructuralLayout {
+    #[serde(deserialize_with = "Option::deserialize")]
+    pos_in_scrolling_layout: Option<[serde_json::Number; 2]>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    tile_pos_in_workspace_view: Option<[serde_json::Number; 2]>,
+    tile_size: [serde_json::Number; 2],
+    window_offset_in_tile: [serde_json::Number; 2],
+    window_size: [serde_json::Number; 2],
 }
 #[derive(Deserialize, Serialize)]
 struct StructuralWorkspace {
@@ -568,7 +583,7 @@ fn blind_target(state: &State, args: &Value) -> R<Value> {
     let generation = state.input_policy.generation();
     let _input = input_policy::Guard::bind(generation);
     state.input_policy.check(generation)?;
-    let windows = niri_epoch(state, "windows", Some(args.expected_epoch))?;
+    let windows = niri_window_identities(state, Some(args.expected_epoch))?;
     let target = focused(&windows).filter(|w| w["id"].as_u64() == Some(args.window_id))
         .ok_or("Blind target must be the current exact focused window")?;
     if target["pid"].as_u64().filter(|pid| *pid > 0).is_none()
@@ -1030,7 +1045,20 @@ fn bounded_command_with_launch(
     input: Option<&[u8]>,
     timeout: Duration,
     epoch: Option<u64>,
+    launch: Option<(&mut dyn FnMut() -> R<()>, &mut launch::Receipt)>,
+) -> R<Vec<u8>> {
+    bounded_command_with_output(state, program, args, input, timeout, epoch, launch, false)
+}
+
+fn bounded_command_with_output(
+    state: &State,
+    program: &str,
+    args: &[String],
+    input: Option<&[u8]>,
+    timeout: Duration,
+    epoch: Option<u64>,
     mut launch: Option<(&mut dyn FnMut() -> R<()>, &mut launch::Receipt)>,
+    structural: bool,
 ) -> R<Vec<u8>> {
     check_epoch(state, epoch)?;
     let mut cmd = Command::new(program);
@@ -1095,7 +1123,7 @@ fn bounded_command_with_launch(
     };
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    let structural_kind = if !state.observation_policy.enabled() && program == "niri" {
+    let structural_kind = if (structural || !state.observation_policy.enabled()) && program == "niri" {
         args.get(2).filter(|_| args.first().is_some_and(|a| a == "msg") && args.get(1).is_some_and(|a| a == "-j")).cloned()
     } else { None };
     let discard_errors = structural_kind.is_some();
@@ -1185,6 +1213,16 @@ fn bounded_command_with_launch(
 
 fn niri(state: &State, kind: &str) -> R<Value> {
     niri_epoch(state, kind, None)
+}
+
+// Target validation needs no window titles. Select the streaming structural
+// decoder before spawning; never buffer full content and redact it afterwards.
+fn niri_window_identities(state: &State, epoch: Option<u64>) -> R<Value> {
+    let out = bounded_command_with_output(
+        state, "niri", &["msg".into(), "-j".into(), "windows".into()],
+        None, Duration::from_secs(3), epoch, None, true,
+    )?;
+    serde_json::from_slice(&out).map_err(|_| "Invalid structural inventory".into())
 }
 fn niri_epoch(state: &State, kind: &str, epoch: Option<u64>) -> R<Value> {
     let _acquiring = if kind == "windows" && state.observation_policy.enabled() {
@@ -1791,7 +1829,7 @@ fn validate(
     if obs.at.elapsed() > if obs.blind { Duration::from_secs(10) } else { MAX_AGE } {
         return Err("Observation is older than 60 seconds; call desktop_observe again".into());
     }
-    let windows = niri_epoch(state, "windows", Some(obs.epoch))?;
+    let windows = niri_window_identities(state, Some(obs.epoch))?;
     let current = focused(&windows);
     let expected = window_id.or_else(|| obs.focused_window.as_ref().and_then(|w| w["id"].as_u64()));
     if expected.is_none() {
@@ -8292,7 +8330,7 @@ mod close_window_contract_tests {
         let calls = dir.join("fake-calls.txt");
         env::set_var("PATH", &shimdir);
         env::set_var("WEASEL_PRIVATE_CLOSE_CALLS", &calls);
-        let target = json!({"id":77,"pid":42,"app_id":"private-fixture-editor","title":"Saved own fixture","workspace_id":33,"is_focused":true,"is_floating":false,"layout":{"fixture":1}});
+        let target = json!({"id":77,"pid":42,"app_id":"private-fixture-editor","title":"Saved own fixture","workspace_id":33,"is_focused":true,"is_floating":false,"layout":{"pos_in_scrolling_layout":null,"tile_pos_in_workspace_view":[0.0,0.0],"tile_size":[800.0,600.0],"window_offset_in_tile":[0.0,0.0],"window_size":[800,600]}});
         let workspace = json!({"id":33,"output":"DP-6","is_active":true,"is_focused":true,"active_window_id":77});
         let geometry = json!({"x":0,"y":0,"width":800,"height":600,"scale":1});
         let mut captured = obs(&dir);
@@ -8332,7 +8370,7 @@ mod close_window_contract_tests {
                 }
                 "pid" => actual["pid"] = json!(999),
                 "app" => actual["app_id"] = json!("other-app"),
-                "layout" => actual["layout"] = json!({"fixture":2}),
+                "layout" => actual["layout"]["tile_size"] = json!([801.0,600.0]),
                 "title" => actual["title"] = json!("Other document"),
                 "output" => ws["output"] = json!("DP-5"),
                 "workspace_active" => ws["is_active"] = json!(false),

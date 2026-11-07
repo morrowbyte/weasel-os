@@ -6,17 +6,28 @@ accessibility, focus, input, model, API or credential code. The Python standard
 library helper owns its lifetime and reads actor status. GTK is isolated here so
 the Rust capture/input core does not gain a GTK dependency or another Cargo tree.
 
-The indicator has four soft transparent 22-logical-pixel edge surfaces and a compact
-glass-style top island: a concise current activity, real phase, confirmed observation
+The indicator has four soft transparent 32-logical-pixel edge surfaces and a compact
+glass-style lower island: a concise current activity, real phase, confirmed observation
 policy and **Alt + Esc · Stopp**. The edge is a static alpha gradient, not a sampled
 backdrop blur: it never reads the desktop and requires no continuous animation.
-The island adapts to narrow outputs; activity text is ellipsized and rendered as
+The island adapts to narrow outputs; activity text wraps to two lines before it is ellipsized and is rendered as
 literal text. All five surfaces request the overlay
 layer, explicitly disable keyboard focus, use empty input regions, and reserve no
 workspace. They target one explicitly selected output, including full-screen
 windows. The intended live target on this laptop is `DP-6`; the user's T3 monitor
 is not automatically selected.
 
+The island makes the current safe intent prominent, above one compact row with the actual phase and a small
+`Blick an` / `Blick aus` indicator. Permission is separate from the action:
+enabled idle says `Wartet`, acquisition says `Liest den Bildschirm`, and typed
+dispatch says `Führt aus`. The task owner updates the concrete intent with the
+existing `activity` command before a meaningful change of intent. This adds no
+per-action sockets or paint waits to the actor's existing batch barriers.
+While waiting, smaller type and padding reduce the island's footprint without
+hiding its two-line intent, confirmed privacy state or stop shortcut. Pure actor
+target validation streams only structural window fields; it does not acquire
+titles or cause observing/active paint transitions. Actual captures and semantic
+reads retain their synchronous observing barrier.
 The label reports executing, observing, queued, waiting, or unknown. No hidden
 model reasoning or action text is displayed. The authored activity must describe
 the operation without input text, credentials or sensitive window titles.

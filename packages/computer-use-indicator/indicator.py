@@ -493,7 +493,8 @@ def run(args):
                                         "observation_mode": request_mode, "observation_active": False})
                                     if requested_phase in ("active", "observing"):
                                         phase_busy = True
-                                    render_phase = requested_phase if requested_phase != "release" else "unknown"
+                                    # Release is confirmed idle, not a failed status read.
+                                    render_phase = requested_phase if requested_phase != "release" else "waiting"
                                     renderer.stdin.write(f"v1 phase {render_phase} {transition}\n")
                                     renderer.stdin.flush()
                                     until = time.monotonic() + STATUS_TIMEOUT_SECONDS

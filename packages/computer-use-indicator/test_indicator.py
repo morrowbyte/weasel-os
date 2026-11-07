@@ -59,8 +59,11 @@ static gboolean end_test(gpointer unused) {
 int main(void) {
     assert(gtk_init_check(NULL, NULL));
     GtkWidget *window = gtk_offscreen_window_new();
+    surfaces[4] = window;
+    island_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
     phase_label = gtk_label_new("Status wird geprüft");
-    gtk_container_add(GTK_CONTAINER(window), phase_label);
+    gtk_box_pack_start(GTK_BOX(island_box), phase_label, FALSE, FALSE, 0);
+    gtk_container_add(GTK_CONTAINER(window), island_box);
     g_signal_connect_after(phase_label, "draw", G_CALLBACK(phase_painted), NULL);
     gtk_widget_show_all(window);
     task_id = "frame-test";
@@ -92,7 +95,11 @@ int main(void) {
     assert(!phase_ack_pending); /* expired lease discards the pending ACK */
     process_line("v1 phase waiting");
     assert(!phase_ack_pending); /* new phase invalidates old ACK */
+    assert(gtk_style_context_has_class(gtk_widget_get_style_context(window), "waiting"));
+    assert(gtk_widget_get_margin_top(island_box) == 8);
     process_line("v1 phase active 44");
+    assert(!gtk_style_context_has_class(gtk_widget_get_style_context(window), "waiting"));
+    assert(gtk_widget_get_margin_top(island_box) == 14);
     g_idle_add_full(G_PRIORITY_HIGH, end_test, NULL, NULL);
     gtk_main();
     assert(stopped && !phase_ack_pending); /* end invalidates before draw */
@@ -451,6 +458,9 @@ class IndicatorLifecycle(unittest.TestCase):
             self.actor_state["active"] = None
             self.actor_state["actor_release_confirmed"] = True
         self.assertTrue(self.phase_request(102, "release")["ok"])
+        lines = [item["line"] for item in self.protocol()]
+        self.assertIn("v1 phase waiting 102", lines)
+        self.assertNotIn("v1 phase unknown 102", lines)
         self.assertEqual(self.end_control().returncode, 0)
         process.wait(timeout=2)
 
