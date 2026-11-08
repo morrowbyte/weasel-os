@@ -57,6 +57,16 @@ Schlüssel bleiben im privaten Store; keine Boat-/SSH-Schlüssel in CI kopieren.
 Andere Autoren werden gegebenenfalls sichtbar abgewiesen. Diese
 Kosten-/Zugriffsgrenze wird nicht automatisch erweitert.
 
+Die ersten echten Läufe des signierten Routingstands `62a3ad13` wurden am
+2026-11-08 noch vor einer Runnerzuteilung von der zentral geerbten
+Action-Allowlist abgewiesen (`startup_failure`). Die bereits verwendeten
+Checkout-/Upload-/Nix-/Cache-SHA-Pins fehlen dort. Eine repo-lokale Ergänzung
+wurde mit HTTP 409 abgelehnt; eine zentrale Abfrage mit HTTP 403.
+Vor weiterer Abnahme muss der Policy-Eigentümer die vier exakten Pins aus
+den Workflows additiv erlauben, ohne Wildcards, allgemeine Freigabe oder
+Wechsel auf veränderliche Tags. Danach dieselben fehlgeschlagenen Läufe
+wiederholen. Diese Ausgangsläufe sind kein bestandener Routingnachweis.
+
 GitHub verlangt für Copilot auf Self-hosted-Runnern eine kompatible externe
 Netzwerkabsicherung und deaktivierte integrierte Copilot-Firewall. Dieser
 Auftrag verändert die Firewall nicht. Ein erfolgreicher Setup-Dispatch

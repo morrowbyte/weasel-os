@@ -11,7 +11,7 @@ aktivierte Änderung des privilegierten Updaters.
 | `scripts/weasel-update-activate.py`, `nix_build()`, `build_application()`, `activate()` | Nach Signatur-/Baselineprüfung erneut Host-/App-Builds, Flakecheck und Anwendungstests am Ziel. | Offen: Produktion nicht Boat-only. |
 | `scripts/weasel-update-migration.py`, SSH-Policy-Prüfung | Baut ausgewählte SSH-, PAM- und Unit-Artefakte mit IFD. | Auf Boat qualifizieren; lokale Prüfung ohne Ersatzbuild. |
 | `scripts/weasel-update-activate.py`, `check_*`, Signatur-/Manifest-/Closureprüfung, `activate_exact()` | Identität, aktives System, direkte Abstammung, autorisierter Signierer, Freigabe, Drift, Sperre, Snapshot, geschützter Switch und Zustand danach. | Auf dem Ziel erhalten; keine Aktivierung beauftragt. |
-| `programs/t3code-fork.nix`, stündlicher `t3code-weasel-update --update` | Extern gepinnter Installer aus `morrowbyte/t3code`, Revision `a37df4a04247fea01340b2546e99bb4c4f6ffb1b`. | Indirekter Updateweg; dessen Nix-Realisierung separat vor Gesamtabschluss bewerten. |
+| `programs/t3code-fork.nix`, stündlicher `t3code-weasel-update --update` | Extern gepinnter Installer aus `morrowbyte/t3code`, Revision `a37df4a04247fea01340b2546e99bb4c4f6ffb1b`; `packaging/nixos/install.sh:97` ruft für neue Versionen `nix build --no-write-lock-file --impure` auf. | Bestätigter lokaler Nix-Paketbau; vor Gesamtabschluss ebenfalls migrieren. |
 
 Manuelle `fr`/`fu`-Befehle sind keine GitHub-CI und werden hier nicht ausgeführt.
 

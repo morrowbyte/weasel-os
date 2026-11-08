@@ -1591,3 +1591,9 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 - An empty ephemeral-runner list does not prove missing Boat access; the existing CI API confirms installation/repository/public-author permission.
 - Protected local updater builds remain an explicit CD gap; trusted artifact intake needs a separate versioned helper change, preserving target gates.
 - Verification planned on assigned Boat: workflow/receipt checks, affected-host evaluations and live GitHub job-to-VM mapping. Exact results belong in the task receipt.
+
+### 2026-11-08: First real Boat CI attempt
+
+- Routing and receipt acceptance/rejection checks passed on the assigned Boat. Initial Nix 2.18 could not parse the relative locked path; official checksum-verified Nix 2.31.2 was provisioned only on that VM for evaluation.
+- GitHub runs 42434297459, 42434298292 and 42434306242 failed before allocating a runner: inherited central Action policy omits existing fixed pins. Repo policy PUT returned 409, organization read returned 403. Do not remove checks, use mutable tags or widen permissions to conceal this gap.
+- The pinned T3 fork installer also calls local `nix build` for a new version; include it in the separate CD migration. No activation or installed helper change occurred.
