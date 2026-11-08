@@ -1584,3 +1584,7 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 - Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
 
 - 2026-11-03: Preserve the already effective Crew t3code URL registration (com.evilweasel.T3Code.desktop) exactly; normal persistent launcher/profile confirmed, no default or launcher change. Original MIME bytes/diff retained privately. Normal signed hook and unchanged affected-host evaluation required; writer provenance not attributed.
+
+## 2026-11-08 — Bestehende MIME-Baseline erhalten
+
+Die bereits wirksame t3code-Zuordnung bleibt unverändert; nur die appgenerierte Entfernung des redundanten Crew-Eintrags aus Added Associations wird gesichert. Default Applications bleibt bytegleich. Original und exakter Einzeilendiff im privaten Tagesbeleg erhalten; `xdg-mime query default x-scheme-handler/t3code` bestätigt weiter com.evilweasel.T3Code.desktop. `nix eval --no-write-lock-file --max-jobs 1 --cores 2 .#nixosConfigurations.nixy-laptop.config.system.build.toplevel.drvPath` Exit 0; unveränderte installierte Baseline per exaktem drvPath abgeglichen. Kein Appstart und keine neue Defaultwahl.

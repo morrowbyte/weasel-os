@@ -63,4 +63,4 @@ x-scheme-handler/http=zen.desktop;
 x-scheme-handler/https=zen.desktop;
 x-scheme-handler/chrome=zen.desktop;
 x-scheme-handler/claude=com.anthropic.Claude.desktop;
-x-scheme-handler/t3code=com.t3tools.T3Code.desktop;com.evilweasel.T3Code.desktop;
+x-scheme-handler/t3code=com.t3tools.T3Code.desktop;
