@@ -1,4 +1,4 @@
-name: Blacksmith Computer Use
+name: Boat Computer Use
 
 on:
   push:
@@ -10,6 +10,7 @@ on:
       - 'flake.nix'
       - 'flake.lock'
       - '.github/workflows/computer-use.yml'
+      - '.github/scripts/**'
   pull_request:
     paths:
       - 'packages/computer-use/**'
@@ -19,22 +20,33 @@ on:
       - 'flake.nix'
       - 'flake.lock'
       - '.github/workflows/computer-use.yml'
+      - '.github/scripts/**'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: computer-use-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: weasel-os-boat-ci
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   package:
     if: vars.CI_ENABLED == 'true'
-    runs-on: ${{ vars.CI_RUNNER || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: boat
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify Boat runner and record source identity
+        run: python3 .github/scripts/assert-boat-runner.py
+      - name: Preserve runner evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: boat-routing-package-${{ github.run_id }}-${{ github.run_attempt }}
+          path: boat-runner.json
+          retention-days: 7
       - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
         with:
           extra_nix_config: |
@@ -74,5 +86,6 @@ jobs:
             package-paths.txt
             closure-paths.txt
             source-commit.txt
+            boat-runner.json
           compression-level: 0
           retention-days: 7

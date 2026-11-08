@@ -1584,3 +1584,10 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 - Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
 
 - 2026-11-03: Preserve the already effective Crew t3code URL registration (com.evilweasel.T3Code.desktop) exactly; normal persistent launcher/profile confirmed, no default or launcher change. Original MIME bytes/diff retained privately. Normal signed hook and unchanged affected-host evaluation required; writer provenance not attributed.
+
+## 2026-11-08: Boat-only CI routing
+
+- Replaced variable/Blacksmith routing with literal Boat runners, shared queued concurrency and runner/source receipts. Added the managed Copilot setup route without changing its firewall.
+- An empty ephemeral-runner list does not prove missing Boat access; the existing CI API confirms installation/repository/public-author permission.
+- Protected local updater builds remain an explicit CD gap; trusted artifact intake needs a separate versioned helper change, preserving target gates.
+- Verification planned on assigned Boat: workflow/receipt checks, affected-host evaluations and live GitHub job-to-VM mapping. Exact results belong in the task receipt.
