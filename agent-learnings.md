@@ -1588,3 +1588,8 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 ## 2026-11-08 — Bestehende MIME-Baseline erhalten
 
 Die bereits wirksame t3code-Zuordnung bleibt unverändert; nur die appgenerierte Entfernung des redundanten Crew-Eintrags aus Added Associations wird gesichert. Default Applications bleibt bytegleich. Original und exakter Einzeilendiff im privaten Tagesbeleg erhalten; `xdg-mime query default x-scheme-handler/t3code` bestätigt weiter com.evilweasel.T3Code.desktop. `nix eval --no-write-lock-file --max-jobs 1 --cores 2 .#nixosConfigurations.nixy-laptop.config.system.build.toplevel.drvPath` Exit 0; unveränderte installierte Baseline per exaktem drvPath abgeglichen. Kein Appstart und keine neue Defaultwahl.
+
+### 2026-11-10 (fixed Boat CI prerequisite for the native Pet branch)
+- Change: Transferred the existing 62a3/d006 workflow and runner-guard files onto freshly confirmed main 5fc96cfd, in a separate local branch in the same worktree. Preserved d835 and its private signed CD proposal unchanged.
+- Boundary: Only CI routing is transferred. No Pet-specific trigger redesign, CD helper changes, new CI run, policy/secret mutation or VM start. Existing exact Action pins still need central approval; managed Copilot remains separately unqualified.
+- Verification: Read-only source comparison and existing signed qualification evidence reused. No tests or builds were run for this preparatory source transfer.
