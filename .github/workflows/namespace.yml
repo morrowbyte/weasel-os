@@ -1,11 +1,11 @@
-name: Blacksmith Nix CI
+name: Boat Nix CI
 
 on:
   push:
     branches: [main]
-    paths: ['**/*.nix', 'flake.lock', '.github/workflows/namespace.yml']
+    paths: ['**/*.nix', 'flake.lock', '.github/workflows/namespace.yml', '.github/scripts/**']
   pull_request:
-    paths: ['**/*.nix', 'flake.lock', '.github/workflows/namespace.yml']
+    paths: ['**/*.nix', 'flake.lock', '.github/workflows/namespace.yml', '.github/scripts/**']
   workflow_dispatch:
     inputs:
       build:
@@ -21,20 +21,31 @@ permissions:
   contents: read
 
 concurrency:
-  group: blacksmith-nix-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: weasel-os-boat-ci
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   hosts:
     if: vars.CI_ENABLED == 'true'
-    runs-on: ${{ inputs.build && 'blacksmith-16vcpu-ubuntu-2404' || vars.CI_RUNNER || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: boat
     timeout-minutes: 180
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         host: [nixy-laptop, nixy-desktop]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify Boat runner and record source identity
+        run: python3 .github/scripts/assert-boat-runner.py
+      - name: Preserve runner evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: boat-routing-${{ matrix.host }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: boat-runner.json
+          retention-days: 7
       - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
         with:
           extra_nix_config: |

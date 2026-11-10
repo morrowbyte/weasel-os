@@ -1,0 +1,46 @@
+name: Boat Copilot Setup
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/copilot-setup-steps.yml'
+      - '.github/scripts/**'
+  pull_request:
+    paths:
+      - '.github/workflows/copilot-setup-steps.yml'
+      - '.github/scripts/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weasel-os-boat-ci
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  # GitHub's managed Copilot workflow reads this exact job on the default branch.
+  # Managed sessions ignore workflow concurrency and may continue after setup
+  # errors. Their organization runner policy must allow this Boat selection.
+  # Keep the existing Copilot firewall unchanged; see docs/namespace-ci.md.
+  copilot-setup-steps:
+    runs-on: boat
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify Boat runner and record source identity
+        run: python3 .github/scripts/assert-boat-runner.py
+      - name: Preserve runner evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: boat-routing-copilot-${{ github.run_id }}-${{ github.run_attempt }}
+          path: boat-runner.json
+          retention-days: 7
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            max-jobs = 4
+            cores = 2
