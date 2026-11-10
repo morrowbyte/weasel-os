@@ -24,6 +24,9 @@ import subprocess
 import sys
 import time
 
+from pet_bridge import PetBridge, PetConnector
+from output_probe import FocusProbe
+
 REVISION = 1
 POLL_SECONDS = 0.1
 STATUS_TIMEOUT_SECONDS = 0.3
@@ -40,6 +43,37 @@ class CapabilityError(RuntimeError):
 class LifecycleTimeout(CapabilityError):
     """Only a deadline expiry permits one bounded lifecycle retry."""
     pass
+
+
+class RendererEvents:
+    """One nonblocking reader shared by normal dispatch and paint barriers."""
+    def __init__(self, stream):
+        self.fd = stream.fileno()
+        os.set_blocking(self.fd, False)
+        self.pending = bytearray()
+
+    def read(self):
+        events = []
+        for _ in range(16):
+            try:
+                chunk = os.read(self.fd, 4096)
+            except BlockingIOError:
+                break
+            if not chunk:
+                raise CapabilityError("renderer pipe closed")
+            self.pending.extend(chunk)
+            while b"\n" in self.pending:
+                line, _, tail = self.pending.partition(b"\n")
+                self.pending[:] = tail
+                if len(line) > 4096:
+                    raise CapabilityError("renderer event exceeds bounded size")
+                event = json.loads(line)
+                if not isinstance(event, dict):
+                    raise CapabilityError("renderer event malformed")
+                events.append(event)
+            if len(self.pending) > 4096:
+                raise CapabilityError("renderer event exceeds bounded size")
+        return events
 
 
 def emit(event, **fields):
@@ -369,6 +403,9 @@ def run(args):
     owned_lease_identity = None
     old_signals = {}
     probe = None
+    pet_bridge = None
+    focus_probe = None
+    pet_connector = None
     scope_begin_attempted = False
     scope_token = args.scope_token or secrets.token_urlsafe(32)
     stop_signal = [None]
@@ -402,6 +439,7 @@ def run(args):
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True, bufsize=1, env=graphical_env,
         )
+        renderer_events = RendererEvents(renderer.stdout)
         selector.register(renderer.stdout, selectors.EVENT_READ, "renderer")
         if args.stdin_control:
             os.set_blocking(sys.stdin.fileno(), False)
@@ -419,11 +457,17 @@ def run(args):
             raise CapabilityError("actor does not support owner-bound task scope lifetime")
         privacy = render_observation(renderer, registered)
         privacy_generation = observation_generation(registered)
+        if os.environ.get("WEASEL_PET_PRESENTATION") == "1":
+            pet_bridge = PetBridge.attach(directory, args.task_id, initial, scope_token)
+            if pet_bridge:
+                selector.register(pet_bridge.stream, selectors.EVENT_READ, "pet")
         renderer.stdin.write("v1 begin\n")
         renderer.stdin.flush()
         emit("starting", task_id=args.task_id, output=args.output, pid=os.getpid(), geometry=geometry)
         next_poll = next_heartbeat = started
         next_geometry = started + 1
+        next_focus = started
+        next_pet_attempt = started + 1
         ready = False
         last_valid_at = time.monotonic()
         timeout_retry = 0
@@ -457,6 +501,8 @@ def run(args):
             timeout = POLL_SECONDS if deadline is None else min(POLL_SECONDS, max(0, deadline - time.monotonic()))
             if probe is not None:
                 timeout = min(timeout, max(0, probe.deadline - time.monotonic()))
+            if focus_probe is not None:
+                timeout = min(timeout, max(0, focus_probe.deadline - time.monotonic()))
             probe_error = None
             fresh_status = None
             events = selector.select(timeout=timeout)
@@ -498,32 +544,25 @@ def run(args):
                                     renderer.stdin.write(f"v1 phase {render_phase} {transition}\n")
                                     renderer.stdin.flush()
                                     until = time.monotonic() + STATUS_TIMEOUT_SECONDS
-                                    pending_ack = bytearray()
                                     while time.monotonic() < until:
                                         if stop_signal[0] is not None:
                                             break
                                         if not select.select([renderer.stdout], [], [], min(0.01, max(0, until - time.monotonic())))[0]:
                                             continue
-                                        chunk = os.read(renderer.stdout.fileno(), 4096)
-                                        if not chunk:
-                                            break
-                                        pending_ack.extend(chunk)
-                                        if len(pending_ack) > 4096:
-                                            break
-                                        while b"\n" in pending_ack:
-                                            line, _, tail = pending_ack.partition(b"\n")
-                                            pending_ack[:] = tail
-                                            rendered = json.loads(line)
+                                        for rendered in renderer_events.read():
+                                            if rendered.get("event") == "action" and pet_bridge:
+                                                pet_bridge.action(rendered)
                                             if (rendered.get("revision") == REVISION and rendered.get("event") == "phase_applied"
                                                 and rendered.get("task_id") == args.task_id and rendered.get("phase") == render_phase
                                                 and rendered.get("transition") == transition):
                                                 applied = True
-                                                break
                                         if applied:
                                             break
                                     if applied and requested_phase == "release":
                                         phase_busy = False
                                         phase = None
+                                    if applied:
+                                        emit("phase_applied", task_id=args.task_id, phase=requested_phase, transition=transition)
                                 client.sendall(json.dumps({"ok": applied, "task_id": args.task_id,
                                     "session_id": initial["session_id"], "epoch": initial["epoch"],
                                     "transition": transition, "phase": requested_phase}).encode() + b"\n")
@@ -548,21 +587,42 @@ def run(args):
                         fresh_status = key.data.advance(_mask)
                     except (OSError, ValueError, CapabilityError) as error:
                         probe_error = error
+                elif isinstance(key.data, FocusProbe):
+                    try:
+                        focused = key.data.advance(_mask)
+                        if focused is not None:
+                            pet_output, pet_geometry = focused
+                            renderer.stdin.write(f"v1 monitor {pet_output} {' '.join(map(str, pet_geometry))}\n")
+                            renderer.stdin.flush()
+                            focus_probe.close()
+                            focus_probe = None
+                            next_focus = time.monotonic() + 0.5
+                    except (OSError, ValueError, subprocess.SubprocessError):
+                        reason = "presentation_output_unavailable"
+                        stop_signal[0] = 0
                 elif key.data == "renderer":
-                    line = renderer.stdout.readline()
-                    if not line or len(line) > 4096:
-                        reason = "renderer_pipe_closed"
-                        stop_signal[0] = 0
-                        continue
-                    event = json.loads(line)
-                    if event.get("revision") == REVISION and event.get("event") == "ready":
-                        if event.get("task_id") != args.task_id or event.get("output") != args.output:
-                            raise CapabilityError("renderer identity differs from owned task")
-                        ready = True
-                        emit("ready", task_id=args.task_id, output=args.output, surfaces=event.get("surfaces"), geometry=geometry)
-                    elif event.get("event") == "ended":
-                        reason = "renderer_" + str(event.get("reason", "ended"))
-                        stop_signal[0] = 0
+                    for event in renderer_events.read():
+                        if event.get("revision") == REVISION and event.get("event") == "ready":
+                            if event.get("task_id") != args.task_id or event.get("output") != args.output:
+                                raise CapabilityError("renderer identity differs from owned task")
+                            ready = True
+                            emit("ready", task_id=args.task_id, output=args.output, surfaces=event.get("surfaces"), geometry=geometry)
+                        elif event.get("event") == "ended":
+                            reason = "renderer_" + str(event.get("reason", "ended"))
+                            stop_signal[0] = 0
+                        elif event.get("event") == "action" and pet_bridge:
+                            pet_bridge.action(event)
+                elif key.data == "pet":
+                    try:
+                        for command in pet_bridge.read():
+                            renderer.stdin.write(command + "\n")
+                        renderer.stdin.flush()
+                    except (OSError, ValueError):
+                        selector.unregister(pet_bridge.stream)
+                        pet_bridge.close()
+                        pet_bridge = None
+                        renderer.stdin.write("v1 bubble clear\nv1 working 0\n")
+                        renderer.stdin.flush()
                 elif key.data == "stdin":
                     chunk = os.read(sys.stdin.fileno(), 4096)
                     if not chunk:
@@ -632,6 +692,22 @@ def run(args):
             if probe is None and now >= next_poll:
                 probe = LifecycleProbe(selector, actor_socket, args.task_id, initial, scope_token)
                 last_valid_at = None  # no renewal while authority is unknown
+            if pet_bridge is None and os.environ.get("WEASEL_PET_PRESENTATION") == "1":
+                if pet_connector is None and now >= next_pet_attempt:
+                    pet_connector = PetConnector(directory, args.task_id, initial, scope_token)
+                    next_pet_attempt = now + 1
+                if pet_connector is not None:
+                    completed, connected = pet_connector.poll()
+                    if completed:
+                        pet_connector = None
+                        if connected:
+                            pet_bridge = connected
+                            selector.register(pet_bridge.stream, selectors.EVENT_READ, "pet")
+            if focus_probe is not None and now >= focus_probe.deadline:
+                reason = "presentation_output_unavailable"
+                break
+            if focus_probe is None and now >= next_focus and os.environ.get("WEASEL_PET_PRESENTATION") == "1":
+                focus_probe = FocusProbe(selector, graphical_env)
             if probe is None and now >= next_geometry:
                 new_geometry, new_logical = selected_geometry(args.output, graphical_env)
                 if new_geometry != geometry or new_logical != logical:
@@ -659,6 +735,10 @@ def run(args):
         cleanup_started = time.monotonic()
         if probe is not None:
             probe.close()
+        if focus_probe is not None:
+            focus_probe.close()
+        if pet_connector is not None:
+            pet_connector.close()
         if scope_begin_attempted:
             try:
                 ended = desktop_lifecycle(actor_socket, args.task_id, "end", initial, scope_token)
@@ -690,6 +770,8 @@ def run(args):
                     renderer.kill()
                     renderer.wait(timeout=0.5)
             renderer.stdout.close()
+        if pet_bridge:
+            pet_bridge.close()
         selector.close()
         if server:
             server.close()

@@ -39,8 +39,9 @@ fresh `desktop_windows` and any save modal afterward; an ACK or an incomplete
 compact inventory does not prove closure. Preserve uncertain or user-owned
 windows and report them instead of applying process-level cleanup.
 
-For the full workflow, keep the selected output visibly marked with the
-click-through soft glass indicator. Use the managed `~/.local/bin/weasel-computer-use-indicator`
+For the full workflow, keep the task-owned desktop pet visible. Its covered
+eyes indicate confirmed observation disabled; reading eyes mark an actual
+observation phase. Persistent Crew display is a separate default-off preference. Use the managed `~/.local/bin/weasel-computer-use-indicator`
 for every `run`, `activity` and `end` call. Do not resolve the bare command from
 PATH: an older system profile may still precede the managed user deployment.
 The active phase is acknowledged before scoped dispatch, and the helper keeps
@@ -55,8 +56,11 @@ keep it alive across model-thinking gaps. End with `v1 end\n` through that
 session or the exact task helper's `end` command. End the exact
 task helper on completion or abort. Its monitor/epoch binding and bounded
 lease must hide it after disconnect/stop, without taking keyboard focus.
-Do not launch it as an unrelated permanent daemon or mark the user's other
-monitor. The indicator is lifecycle maintenance; desktop input still uses MCP.
+Do not launch the task helper as an unrelated permanent daemon. Presentation
+follows the focused monitor using structural output queries; the action target
+and all input/Stop guards remain independently bound. Crew may separately own
+a persistent pet, which receives safe thread notifications without authorizing
+Computer Use. Desktop input still uses MCP.
 
 Optional `weasel_decisions.desktop_decide` supplies fast predicate/choice
 evidence using `gpt-6-luna`, separately from free action planning. Use a fresh

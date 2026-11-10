@@ -668,6 +668,64 @@ class IndicatorLifecycle(unittest.TestCase):
         self.assertEqual(self.ended(process)["reason"], "capability_unavailable")
         self.assertLess(time.monotonic() - started, 0.7)
 
+    def test_crew_disconnect_or_invalid_first_projection_after_reattach_keeps_cu_scope(self):
+        self.env["WEASEL_PET_PRESENTATION"] = "1"
+        self.niri.write_text(
+            f"#!{sys.executable}\nimport json,sys\n"
+            f"outputs={self.niri_state!r}\n"
+            "print(json.dumps({'name':'DP-6', **outputs['DP-6']} if sys.argv[-1]=='focused-output' else outputs))\n"
+        )
+        endpoint = self.actor_dir / "indicators" / "pet.sock"
+        for packet in (b"", b'{"v":1,"type":"projection","commands":["v1 end"]}\n'):
+            with self.subTest(packet=packet):
+                with self.actor_lock:
+                    self.actor_events.clear()
+                process = self.launch()
+                self.ready(process)
+                cleared_before = sum(item["line"] == "v1 bubble clear" for item in self.protocol())
+                attached = threading.Event()
+                failures = []
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+                    server.bind(str(endpoint))
+                    endpoint.chmod(0o600)
+                    server.listen(1)
+                    server.settimeout(2)
+
+                    def close_after_attach():
+                        try:
+                            with server.accept()[0] as peer:
+                                peer.settimeout(1)
+                                request = indicator.read_line(peer, 4096)
+                                self.assertEqual(request["type"], "attach")
+                                peer.sendall(b'{"v":1,"type":"attached"}\n' + packet)
+                            attached.set()
+                        except Exception as error:
+                            failures.append(type(error).__name__)
+                            attached.set()
+
+                    worker = threading.Thread(target=close_after_attach, daemon=True)
+                    worker.start()
+                    try:
+                        self.assertTrue(attached.wait(2), "helper did not reattach")
+                        self.assertEqual(failures, [])
+                        deadline = time.monotonic() + 1
+                        while time.monotonic() < deadline and process.poll() is None:
+                            if sum(item["line"] == "v1 bubble clear" for item in self.protocol()) > cleared_before:
+                                break
+                            time.sleep(0.01)
+                        else:
+                            self.fail("optional bridge failure was not handled locally")
+                        self.assertIsNone(process.poll())
+                        self.assertIn("fixture-task", self.task_scopes)
+                        self.assertTrue(self.phase_request(1)["ok"], "paint/control barrier stopped responding")
+                        self.assertEqual(self.end_control().returncode, 0)
+                        ended = self.ended(process)
+                        self.assertEqual(ended["reason"], "explicit_end")
+                        self.assertTrue(ended["renderer_exit_confirmed"])
+                    finally:
+                        worker.join(timeout=2)
+                endpoint.unlink(missing_ok=True)
+
     def protocol(self):
         return [json.loads(line) for line in self.renderer_log.read_text().splitlines()]
 
