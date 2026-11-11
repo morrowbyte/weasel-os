@@ -1589,6 +1589,11 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 
 Die bereits wirksame t3code-Zuordnung bleibt unverändert; nur die appgenerierte Entfernung des redundanten Crew-Eintrags aus Added Associations wird gesichert. Default Applications bleibt bytegleich. Original und exakter Einzeilendiff im privaten Tagesbeleg erhalten; `xdg-mime query default x-scheme-handler/t3code` bestätigt weiter com.evilweasel.T3Code.desktop. `nix eval --no-write-lock-file --max-jobs 1 --cores 2 .#nixosConfigurations.nixy-laptop.config.system.build.toplevel.drvPath` Exit 0; unveränderte installierte Baseline per exaktem drvPath abgeglichen. Kein Appstart und keine neue Defaultwahl.
 
+### 2026-11-11 — batch candidate 20261111T111222Z-6b37e068
+
+- Updated existing configured sources: flake.lock, flake.nix, packages/chatgpt/default.nix, packages/codex-acp.nix, packages/netbird-bin.nix, packages/netbird-ui-bin.nix, packages/proton-pass-cli.nix, packages/t3code/source.json, packages/vesktop-bin.nix, profiles/home/base.nix.
+- Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
+
 ## 2026-11-11 — Schlanke Proton-Backups mit erhaltenen Crew-Daten
 
 Tägliche doppelte Repository-Checks durch genaue Snapshot-ID-Rücklese ersetzt; Sonntag sichert und prüft in einem gesperrten Job. Restic-Tagesstände bleiben ohne Diff-Kette restaurierbar. Docker, Paket-/Modelldownloads und Steam-Downloads sind ausgeschlossen; Crew-Profile, Verläufe, Anhänge und Saves bleiben enthalten. Live-Crew-SQLite wird über konsistente Online-Kopien gesichert und beim Restore zurückgeordnet. Veröffentlichung und Entfernung der Zwischenkopien erfolgen atomar über einen ausgeschlossenen Arbeitsbereich, damit Abbrüche weder alte Daten wieder einschleusen noch Folgebackups blockieren. Prüfung: `python3 tests/test-cloud-backup.py`, `python3 tests/test-system-backup-lifecycle.py`, Nix-Syntax und betroffene Laptop-Evaluation; echter kleiner Restic-Restore einschließlich WAL und entferntem Parent-Snapshot.

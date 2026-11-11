@@ -51,7 +51,6 @@ in
       pkgs.volantes-cursors
       pkgs.kitty
       pkgs.localsend
-      pkgsUnstable.lmstudio
       pkgsUnstable.stremio-linux-shell
       pkgsUnstable.zed-editor
     ];
