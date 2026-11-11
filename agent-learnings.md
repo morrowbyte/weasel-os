@@ -1588,3 +1588,9 @@ Migrated the protected updater origin checks, dev-shell default and active setup
 ## 2026-11-08 — Bestehende MIME-Baseline erhalten
 
 Die bereits wirksame t3code-Zuordnung bleibt unverändert; nur die appgenerierte Entfernung des redundanten Crew-Eintrags aus Added Associations wird gesichert. Default Applications bleibt bytegleich. Original und exakter Einzeilendiff im privaten Tagesbeleg erhalten; `xdg-mime query default x-scheme-handler/t3code` bestätigt weiter com.evilweasel.T3Code.desktop. `nix eval --no-write-lock-file --max-jobs 1 --cores 2 .#nixosConfigurations.nixy-laptop.config.system.build.toplevel.drvPath` Exit 0; unveränderte installierte Baseline per exaktem drvPath abgeglichen. Kein Appstart und keine neue Defaultwahl.
+
+## 2026-11-11: LM Studio auf Nutzerwunsch entfernen
+
+- LM Studio aus dem gemeinsamen Home-Paketset entfernt; lokale Modelle und regenerierbare LM-Studio-Laufzeitdaten werden separat unter Storage-/Aktivierungs-/Backuplock entfernt. Kleine vorhandene Gespräche bleiben erhalten.
+- Nix-Storedateien nicht manuell löschen: Quellkonfiguration, aktiviertes Paketprofil und tatsächliche Datenträgerfreigabe getrennt ausweisen.
+- Prüfung: Nix-Syntax und betroffene Hostevaluationen; keine erneute Paketdiscovery oder Vollsuite für die einzeilige Paketentfernung.
