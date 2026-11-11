@@ -19,6 +19,10 @@ The pet follows Niri's focused output using structural `focused-output`/`outputs
 queries, including while observation is disabled. Presentation movement does not
 change the action target, geometry guard, task identity, epoch or Stop behavior.
 No window inventory, title, pixels or accessibility tree is read for this purpose.
+If a focus query fails, the pet stays on its last confirmed monitor and retries
+after 500 ms. Only fixed diagnostic codes are logged. This presentation retry
+does not end the Computer Use task; the independent target-output geometry,
+monitor-loss, Actor lifecycle and paint-acknowledgement guards remain in force.
 
 The visual states distinguish permission from acquisition: covered eyes mean
 confirmed observation disabled; reading eyes indicate acquisition preparation or

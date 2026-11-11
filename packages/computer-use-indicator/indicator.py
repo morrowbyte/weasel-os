@@ -25,7 +25,7 @@ import sys
 import time
 
 from pet_bridge import PetBridge, PetConnector
-from output_probe import FocusProbe
+from output_probe import FocusProbe, FocusProbeError
 
 REVISION = 1
 POLL_SECONDS = 0.1
@@ -475,6 +475,20 @@ def run(args):
         phase_busy = False
         last_transition = -1
         stdin_pending = bytearray()
+        focus_problem = None
+
+        def retry_focus(cause, stage):
+            nonlocal focus_probe, next_focus, focus_problem
+            if focus_probe is not None:
+                focus_probe.close()
+                focus_probe = None
+            next_focus = time.monotonic() + 0.5
+            problem = (cause, stage)
+            if problem != focus_problem:
+                emit("presentation_focus_retry", task_id=args.task_id,
+                     cause=cause, stage=stage, retry_after_ms=500)
+            focus_problem = problem
+
         while True:
             now = time.monotonic()
             if stop_signal[0] is not None:
@@ -590,6 +604,10 @@ def run(args):
                 elif isinstance(key.data, FocusProbe):
                     try:
                         focused = key.data.advance(_mask)
+                    except (OSError, ValueError, subprocess.SubprocessError) as error:
+                        cause = error.code if isinstance(error, FocusProbeError) else "query_io_failed"
+                        retry_focus(cause, key.data.stage)
+                    else:
                         if focused is not None:
                             pet_output, pet_geometry = focused
                             renderer.stdin.write(f"v1 monitor {pet_output} {' '.join(map(str, pet_geometry))}\n")
@@ -597,9 +615,9 @@ def run(args):
                             focus_probe.close()
                             focus_probe = None
                             next_focus = time.monotonic() + 0.5
-                    except (OSError, ValueError, subprocess.SubprocessError):
-                        reason = "presentation_output_unavailable"
-                        stop_signal[0] = 0
+                            if focus_problem is not None:
+                                emit("presentation_focus_restored", task_id=args.task_id)
+                                focus_problem = None
                 elif key.data == "renderer":
                     for event in renderer_events.read():
                         if event.get("revision") == REVISION and event.get("event") == "ready":
@@ -704,10 +722,12 @@ def run(args):
                             pet_bridge = connected
                             selector.register(pet_bridge.stream, selectors.EVENT_READ, "pet")
             if focus_probe is not None and now >= focus_probe.deadline:
-                reason = "presentation_output_unavailable"
-                break
+                retry_focus("deadline_expired", focus_probe.stage)
             if focus_probe is None and now >= next_focus and os.environ.get("WEASEL_PET_PRESENTATION") == "1":
-                focus_probe = FocusProbe(selector, graphical_env)
+                try:
+                    focus_probe = FocusProbe(selector, graphical_env)
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    retry_focus("query_start_failed", "focused-output")
             if probe is None and now >= next_geometry:
                 new_geometry, new_logical = selected_geometry(args.output, graphical_env)
                 if new_geometry != geometry or new_logical != logical:

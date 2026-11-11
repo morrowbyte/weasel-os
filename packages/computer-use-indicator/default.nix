@@ -86,6 +86,8 @@ stdenv.mkDerivation {
     ./test-monitor-match
     ${python3}/bin/python3 -m unittest -v test_pet_protocol
     ${python3}/bin/python3 -m unittest -v test_indicator.IndicatorLifecycle.test_crew_disconnect_or_invalid_first_projection_after_reattach_keeps_cu_scope
+    ${python3}/bin/python3 -m unittest -v test_indicator.IndicatorLifecycle.test_focus_query_failure_retries_without_ending_cu_and_keeps_stop_reachable
+    ${python3}/bin/python3 -m unittest -v test_indicator.IndicatorLifecycle.test_focus_retry_does_not_mask_original_target_output_loss
     runHook postCheck
   '';
   meta = {

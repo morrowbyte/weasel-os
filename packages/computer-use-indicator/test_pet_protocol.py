@@ -17,9 +17,9 @@ from unittest import mock
 from pet_bridge import render_commands
 from pet_protocol import (Projection, ProtocolError, STATES, read_regular,
                           text, validate_message, validate_pack)
-from indicator import RendererEvents, process_start_ticks
-from companion import Companion
-from output_probe import FocusProbe
+from indicator import CapabilityError, RendererEvents, process_start_ticks
+from companion import Companion, focus_output
+from output_probe import FocusProbe, FocusProbeError
 
 
 def projection(revision=0, items=()):
@@ -153,6 +153,51 @@ class ProtocolTests(unittest.TestCase):
                 selector.close()
                 os.close(read_fd)
                 os.close(write_fd)
+
+    def test_completed_focus_response_and_eof_need_only_one_dispatch(self):
+        with tempfile.TemporaryDirectory(prefix="pet-focus-drain-") as directory:
+            executable = Path(directory) / "niri"
+            executable.write_text("#!" + sys.executable + "\nimport json\nprint(json.dumps({'name':'test','logical':{'x':0,'y':0,'width':800,'height':600}}))\n")
+            executable.chmod(0o700)
+            with selectors.DefaultSelector() as selector:
+                with mock.patch.dict(os.environ, {"WEASEL_INDICATOR_NIRI": str(executable)}):
+                    probe = FocusProbe(selector, dict(os.environ))
+                try:
+                    probe.process.wait(timeout=1)
+                    # Model a higher-priority paint barrier postponing the read.
+                    time.sleep(0.31)
+                    events = selector.select(0)
+                    self.assertEqual(len(events), 1)
+                    self.assertEqual(probe.advance(events[0][1]), ("test", (0, 0, 800, 600)))
+                finally:
+                    probe.close()
+
+    def test_invalid_output_entries_use_geometry_error_in_both_focus_paths(self):
+        for entry in (None, [], "invalid", 7, True):
+            with self.subTest(entry=entry):
+                responses = [mock.Mock(stdout=b'{"name":"test"}'),
+                             mock.Mock(stdout=json.dumps({"test": entry}).encode())]
+                with mock.patch("companion.subprocess.run", side_effect=responses) as run:
+                    with self.assertRaises(CapabilityError):
+                        focus_output({})
+                    self.assertEqual([call.args[0][-1] for call in run.call_args_list], ["focused-output", "outputs"])
+                with tempfile.TemporaryDirectory(prefix="pet-focus-entry-") as directory:
+                    executable = Path(directory) / "niri"
+                    replies = {"focused-output": {"name": "test"}, "outputs": {"test": entry}}
+                    executable.write_text("#!" + sys.executable + "\nimport json,sys\nreplies=" + repr(replies) + "\nprint(json.dumps(replies[sys.argv[-1]]))\n")
+                    executable.chmod(0o700)
+                    with selectors.DefaultSelector() as selector:
+                        with mock.patch.dict(os.environ, {"WEASEL_INDICATOR_NIRI": str(executable)}):
+                            probe = FocusProbe(selector, dict(os.environ))
+                        try:
+                            deadline = time.monotonic() + 2
+                            with self.assertRaises(FocusProbeError) as error:
+                                while time.monotonic() < deadline:
+                                    for key, mask in selector.select(0.05):
+                                        key.data.advance(mask)
+                            self.assertEqual(error.exception.code, "geometry_unavailable")
+                        finally:
+                            probe.close()
 
     def test_projection_rejects_authority_fields_and_secret_payload_channels(self):
         for field in ("observationMode", "observationActive", "phase", "windowTitle", "payload"):

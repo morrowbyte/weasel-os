@@ -42,7 +42,8 @@ def focus_output(environment):
         result = subprocess.run([niri, "msg", "--json", "outputs"], env=environment,
                                 capture_output=True, timeout=0.3, check=True)
         outputs = json.loads(result.stdout)
-        logical = outputs.get(output["name"], {}).get("logical") if isinstance(outputs, dict) else None
+        selected = outputs.get(output["name"]) if isinstance(outputs, dict) else None
+        logical = selected.get("logical") if isinstance(selected, dict) else None
     if not isinstance(logical, dict):
         raise CapabilityError("focused output geometry unavailable")
     geometry = tuple(logical.get(k) for k in ("x", "y", "width", "height"))

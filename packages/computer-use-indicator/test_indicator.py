@@ -726,6 +726,73 @@ class IndicatorLifecycle(unittest.TestCase):
                         worker.join(timeout=2)
                 endpoint.unlink(missing_ok=True)
 
+    def test_focus_query_failure_retries_without_ending_cu_and_keeps_stop_reachable(self):
+        self.env["WEASEL_PET_PRESENTATION"] = "1"
+        mode_path = self.runtime / "focus-mode"
+        self.niri.write_text(
+            f"#!{sys.executable}\nimport json,sys,time\nfrom pathlib import Path\n"
+            f"outputs={self.niri_state!r}\n"
+            f"mode=Path({str(mode_path)!r}).read_text()\n"
+            "if sys.argv[-1]=='focused-output':\n"
+            " if mode=='slow': time.sleep(0.45)\n"
+            " if mode=='invalid': print('SYNTHETIC-PRIVATE-MARKER'); sys.exit(0)\n"
+            " if mode=='invalid_entry': print(json.dumps({'name':'DP-other'})); sys.exit(0)\n"
+            " print(json.dumps({'name':'DP-6', **outputs['DP-6']}))\n"
+            "else: print(json.dumps({**outputs,'DP-other':None} if mode=='invalid_entry' else outputs))\n"
+        )
+
+        def wait_event(process, wanted):
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline and process.poll() is None:
+                for line in self.stdout_prefix.get(process.pid, b"").splitlines():
+                    event = json.loads(line)
+                    if event.get("event") == wanted:
+                        return event
+                if select.select([process.stdout], [], [], 0.05)[0]:
+                    chunk = os.read(process.stdout.fileno(), 4096)
+                    self.stdout_prefix[process.pid] = self.stdout_prefix.get(process.pid, b"") + chunk
+            self.fail("helper did not report " + wanted)
+
+        for mode, cause, stage in (("invalid", "invalid_json", "focused-output"),
+                                   ("slow", "deadline_expired", "focused-output"),
+                                   ("invalid_entry", "geometry_unavailable", "outputs")):
+            with self.subTest(mode=mode):
+                with self.actor_lock:
+                    self.actor_events.clear()
+                mode_path.write_text(mode)
+                process = self.launch()
+                self.ready(process)
+                retry = wait_event(process, "presentation_focus_retry")
+                self.assertEqual(retry["cause"], cause)
+                self.assertEqual(retry["stage"], stage)
+                self.assertEqual(retry["retry_after_ms"], 500)
+                self.assertIsNone(process.poll())
+                self.assertIn("fixture-task", self.task_scopes)
+                self.assertTrue(self.phase_request(1)["ok"])
+                mode_path.write_text("valid")
+                wait_event(process, "presentation_focus_restored")
+                self.assertEqual(self.end_control().returncode, 0)
+                ended = self.ended(process)
+                self.assertEqual(ended["reason"], "explicit_end")
+                self.assertTrue(ended["renderer_exit_confirmed"])
+                self.assertNotIn("SYNTHETIC-PRIVATE-MARKER", json.dumps(self.last_events))
+                self.assertNotIn("SYNTHETIC-PRIVATE-MARKER", self.renderer_log.read_text())
+
+    def test_focus_retry_does_not_mask_original_target_output_loss(self):
+        self.env["WEASEL_PET_PRESENTATION"] = "1"
+        self.niri.write_text(
+            f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
+            "if sys.argv[-1]=='focused-output': print('invalid-focus-response')\n"
+            f"else: print(Path({str(self.niri_state_path)!r}).read_text())\n"
+        )
+        process = self.launch()
+        self.ready(process)
+        self.niri_state_path.write_text("{}")
+        ended = self.ended(process)
+        self.assertEqual(ended["reason"], "capability_unavailable")
+        self.assertTrue(ended["renderer_exit_confirmed"])
+        self.assertEqual(self.task_scopes, {})
+
     def protocol(self):
         return [json.loads(line) for line in self.renderer_log.read_text().splitlines()]
 
