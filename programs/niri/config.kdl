@@ -28,3 +28,6 @@ include "dms/env.kdl"
 include "dms/binds.kdl"
 include "dms/cursor.kdl"
 include "dms/outputs.kdl"
+
+// Crew owns this optional user file for the configured desktop-pet shortcut.
+include optional=true "crew-pet.kdl"
