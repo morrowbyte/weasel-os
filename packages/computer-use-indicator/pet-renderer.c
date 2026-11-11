@@ -41,8 +41,8 @@ typedef enum { PHASE_UNKNOWN, PHASE_ACTIVE, PHASE_OBSERVING,
 typedef enum { OBS_UNKNOWN, OBS_ENABLED, OBS_DISABLED } Observation;
 typedef enum { BUBBLE_NONE, BUBBLE_APPROVAL, BUBBLE_QUESTION, BUBBLE_RESULT } BubbleKind;
 
-static GtkWidget *body, *drawing, *bubble, *summary_label, *kind_label;
-static GtkWidget *count_label, *stop_label, *open_button, *dismiss_button;
+static GtkWidget *body, *drawing, *bubble, *summary_label, *kind_icon;
+static GtkWidget *open_button, *dismiss_button;
 static GtkCssProvider *css;
 static GdkMonitor *target;
 static GdkRectangle expected, initial_geometry;
@@ -250,8 +250,9 @@ static void accessible_state(void) {
         "Bildschirmzugriff erlaubt, liest gerade nicht.";
     const char *status = pose == POSE_WORKING ? "Arbeitet." : pose == POSE_WAITING ? "Wartet." :
         pose == POSE_ATTENTION ? "Nachricht wartet." : "";
-    char *description = g_strdup_printf("%s %s %u Aufgaben, %u Nachrichten. %s",
-        privacy, status, working_count, queue_count, activity ? activity : "");
+    char *description = g_strdup_printf("%s %s %u Aufgaben, %u Nachrichten. %s%s",
+        privacy, status, working_count, queue_count, activity ? activity : "",
+        cu_seen && !awaiting_begin ? " Computer Use stoppen: Alt + Escape." : "");
     AtkObject *object = gtk_widget_get_accessible(drawing);
     atk_object_set_name(object, "Wiesel");
     atk_object_set_role(object, ATK_ROLE_IMAGE);
@@ -390,24 +391,77 @@ static void native_pet(cairo_t *cr, PetPose state, unsigned animation_frame) {
 
 static void thought_dots(cairo_t *cr) {
     /* Pure progress marks, never invented thoughts or task summaries. */
-    cairo_set_source_rgba(cr, 0.08, 0.14, 0.19, 0.94);
+    cairo_set_source_rgba(cr, 1.0, 0.98, 0.94, 0.98);
     round_rect(cr, 4, 4, 45, 24, 12); cairo_fill(cr);
     ellipse(cr, 37, 32, 4, 3); cairo_fill(cr);
     ellipse(cr, 41, 39, 2, 2); cairo_fill(cr);
     for (unsigned i = 0; i < 3; ++i) {
-        cairo_set_source_rgba(cr, 0.80, 0.94, 0.90, reduced_motion || frame % 3 == i ? 1 : 0.45);
+        cairo_set_source_rgba(cr, 0.29, 0.25, 0.22, reduced_motion || frame % 3 == i ? 1 : 0.35);
         ellipse(cr, 15 + i * 11, 16, 2.5, 2.5); cairo_fill(cr);
     }
 }
 
+static void reading_symbol(cairo_t *cr) {
+    /* The atlas may show only a small gaze change. A native screen/eye marks
+     * the confirmed reading phase clearly for every custom character, from
+     * its first painted frame. This adds neither a phase nor a dwell timer. */
+    cairo_save(cr);
+    cairo_set_source_rgb(cr, 1.0, 0.98, 0.94);
+    round_rect(cr, 2, 2, 52, 34, 12); cairo_fill(cr);
+    ellipse(cr, 42, 39, 4, 3); cairo_fill(cr);
+    ellipse(cr, 46, 45, 2, 2); cairo_fill(cr);
+    cairo_set_source_rgb(cr, 0.29, 0.25, 0.22);
+    cairo_set_line_width(cr, 1.7); cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    round_rect(cr, 10, 7, 35, 22, 4); cairo_stroke(cr);
+    cairo_move_to(cr, 27.5, 29); cairo_line_to(cr, 27.5, 32);
+    cairo_move_to(cr, 22, 32); cairo_line_to(cr, 33, 32); cairo_stroke(cr);
+    cairo_move_to(cr, 17, 18); cairo_curve_to(cr, 23, 11, 32, 11, 38, 18);
+    cairo_curve_to(cr, 32, 25, 23, 25, 17, 18); cairo_close_path(cr); cairo_stroke(cr);
+    fill_ellipse(cr, 27.5, 18, 3, 3, 0.12, 0.42, 0.37);
+    cairo_restore(cr);
+}
+
 static void queue_badge(cairo_t *cr) {
     unsigned count = queue_count ? queue_count : bubble_kind != BUBBLE_NONE ? 1 : 0;
-    if (!count) return;
+    if (count <= 1) return;
     char text[8];
     if (count > 99) g_strlcpy(text, "99+", sizeof text);
     else g_snprintf(text, sizeof text, "%u", count);
-    fill_ellipse(cr, 119, 24, count > 99 ? 17 : 14, 13, 0.96, 0.73, 0.32);
-    cairo_set_source_rgb(cr, 0.15, 0.17, 0.20); small_text(cr, text, 119, 24, 12);
+    fill_ellipse(cr, 119, 24, count > 99 ? 14 : 11, 11, 1.0, 0.94, 0.82);
+    cairo_set_source_rgb(cr, 0.29, 0.25, 0.22); small_text(cr, text, 119, 24, 10);
+}
+
+static void privacy_symbol(cairo_t *cr) {
+    cairo_save(cr);
+    cairo_translate(cr, 33, 149);
+    fill_ellipse(cr, 0, 0, 13, 10, 1.0, 0.98, 0.94);
+    cairo_set_source_rgb(cr, 0.31, 0.27, 0.24);
+    cairo_set_line_width(cr, 1.4); cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    if (observation == OBS_UNKNOWN) small_text(cr, "?", 0, 0, 13);
+    else {
+        cairo_move_to(cr, -8, 0); cairo_curve_to(cr, -3, -6, 3, -6, 8, 0);
+        cairo_curve_to(cr, 3, 6, -3, 6, -8, 0); cairo_stroke(cr);
+        if (observation == OBS_DISABLED) {
+            cairo_move_to(cr, -7, 6); cairo_line_to(cr, 7, -6); cairo_stroke(cr);
+        } else {
+            gboolean reading = observation_active || phase == PHASE_OBSERVING;
+            if (reading) cairo_set_source_rgb(cr, 0.12, 0.42, 0.37);
+            ellipse(cr, 0, 0, reading ? 2.8 : 1.5, reading ? 2.8 : 1.5); cairo_fill(cr);
+        }
+    }
+    cairo_restore(cr);
+}
+
+static void stop_symbol(cairo_t *cr) {
+    /* This is a shortcut affordance, not a pointer target on the pass-through body. */
+    cairo_save(cr); cairo_translate(cr, 94, 149);
+    cairo_set_source_rgb(cr, 1.0, 0.98, 0.94);
+    round_rect(cr, -34, -8, 68, 16, 5); cairo_fill(cr);
+    cairo_set_source_rgb(cr, 0.58, 0.22, 0.18);
+    round_rect(cr, -28, -2.5, 5, 5, 1); cairo_fill(cr);
+    cairo_set_source_rgb(cr, 0.31, 0.27, 0.24);
+    small_text(cr, "Alt+Esc", 5, 0, 9);
+    cairo_restore(cr);
 }
 
 static gboolean pet_draw(GtkWidget *widget, cairo_t *cr, gpointer unused) {
@@ -436,15 +490,12 @@ static gboolean pet_draw(GtkWidget *widget, cairo_t *cr, gpointer unused) {
         cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_BILINEAR);
         cairo_paint(cr); cairo_restore(cr); g_object_unref(sprite);
     } else native_pet(cr, pose, frame);
-    if (pose == POSE_WORKING || working_count || phase == PHASE_ACTIVE) thought_dots(cr);
+    if (pose == POSE_READING) reading_symbol(cr);
+    else if (pose == POSE_WORKING || working_count || phase == PHASE_ACTIVE) thought_dots(cr);
     /* A queue badge must not conceal the unknown-permission question mark. */
     if (pose != POSE_UNKNOWN) queue_badge(cr);
-    if (cu_seen && !awaiting_begin) {
-        cairo_set_source_rgba(cr, 0.07, 0.13, 0.17, 0.94);
-        round_rect(cr, 20, 145, 104, 14, 7); cairo_fill(cr);
-        cairo_set_source_rgb(cr, 0.90, 0.96, 0.94);
-        small_text(cr, "Alt + Esc · Stopp", 72, 152, 10);
-    }
+    privacy_symbol(cr);
+    if (cu_seen && !awaiting_begin) stop_symbol(cr);
     cairo_restore(cr);
     if (cairo_status(cr) == CAIRO_STATUS_SUCCESS) {
         drawn_serial = render_serial; drawn_pose = pose; drawn_observation = observation;
@@ -517,8 +568,6 @@ static void sync_visibility(void) {
         gtk_widget_show_all(body);
         if (bubble_kind != BUBBLE_NONE) {
             gtk_widget_show_all(bubble);
-            gtk_widget_set_visible(stop_label, cu_seen && !awaiting_begin);
-            gtk_widget_set_visible(count_label, queue_count > 0);
         } else gtk_widget_hide(bubble);
     } else {
         gtk_widget_hide(body); gtk_widget_hide(bubble);
@@ -549,15 +598,111 @@ static void bubble_action(GtkButton *button, gpointer value) {
     g_free(line); g_free(escaped); g_free(id);
 }
 
+/* Strip only the exact public Crew prefix. The original is retained for ATK
+ * and pointer tooltips; unknown text is not guessed at, rewritten or redacted. */
+static const char *visible_summary(const char *text) {
+    if (!text) return "";
+    if (!g_str_has_prefix(text, "Thread ")) return text;
+    const char *at = text + strlen("Thread ");
+    if (*at < '1' || *at > '9') return text;
+    do { ++at; } while (g_ascii_isdigit(*at));
+    const char *prefixes[] = { " · Question: ", " · Result: " };
+    for (unsigned i = 0; i < G_N_ELEMENTS(prefixes); ++i) {
+        if (g_str_has_prefix(at, prefixes[i]) && at[strlen(prefixes[i])])
+            return at + strlen(prefixes[i]);
+    }
+    return text;
+}
+
+typedef enum { ICON_KIND, ICON_OPEN, ICON_DISMISS } BubbleIcon;
+
+static gboolean icon_draw(GtkWidget *widget, cairo_t *cr, gpointer value) {
+    BubbleIcon icon = GPOINTER_TO_INT(value);
+    int width = gtk_widget_get_allocated_width(widget), height = gtk_widget_get_allocated_height(widget);
+    cairo_save(cr); cairo_translate(cr, (width - 20) / 2.0, (height - 20) / 2.0);
+    cairo_set_line_width(cr, 1.65); cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+    cairo_set_source_rgba(cr, 0.29, 0.25, 0.22, gtk_widget_is_sensitive(widget) ? 1.0 : 0.4);
+    if (icon == ICON_OPEN) {
+        cairo_move_to(cr, 5, 15); cairo_line_to(cr, 15, 5);
+        cairo_move_to(cr, 6, 5); cairo_line_to(cr, 15, 5); cairo_line_to(cr, 15, 14);
+        cairo_stroke(cr);
+    } else if (icon == ICON_DISMISS) {
+        cairo_set_source_rgba(cr, 0.44, 0.39, 0.35, gtk_widget_is_sensitive(widget) ? 1.0 : 0.4);
+        cairo_move_to(cr, 6, 6); cairo_line_to(cr, 14, 14);
+        cairo_move_to(cr, 14, 6); cairo_line_to(cr, 6, 14); cairo_stroke(cr);
+    } else if (bubble_kind == BUBBLE_RESULT) {
+        cairo_move_to(cr, 4, 10); cairo_line_to(cr, 8, 14); cairo_line_to(cr, 16, 6); cairo_stroke(cr);
+    } else {
+        if (bubble_kind == BUBBLE_APPROVAL) {
+            /* An unanswered shield/question, never an already-approved check. */
+            cairo_move_to(cr, 10, 1.5); cairo_line_to(cr, 17, 4.5);
+            cairo_curve_to(cr, 17, 12.5, 14, 16, 10, 18.5);
+            cairo_curve_to(cr, 6, 16, 3, 12.5, 3, 4.5); cairo_close_path(cr); cairo_stroke(cr);
+        }
+        cairo_move_to(cr, 7, 7); cairo_curve_to(cr, 7, 3, 14, 3, 14, 7);
+        cairo_curve_to(cr, 14, 9.5, 10, 9, 10, 12); cairo_stroke(cr);
+        ellipse(cr, 10, 15, 0.8, 0.8); cairo_fill(cr);
+    }
+    cairo_restore(cr);
+    return FALSE;
+}
+
+static GtkWidget *new_icon(BubbleIcon icon) {
+    GtkWidget *widget = gtk_drawing_area_new();
+    gtk_widget_set_size_request(widget, 20, 20);
+    atk_object_set_role(gtk_widget_get_accessible(widget),
+        icon == ICON_KIND ? ATK_ROLE_IMAGE : ATK_ROLE_REDUNDANT_OBJECT);
+    g_signal_connect(widget, "draw", G_CALLBACK(icon_draw), GINT_TO_POINTER(icon));
+    return widget;
+}
+
+static void bubble_outline(cairo_t *cr, double width, double height) {
+    double left = 8, top = 6, right = width - 8, bottom = height - 22, radius = 22;
+    cairo_new_sub_path(cr);
+    cairo_move_to(cr, left + radius, top);
+    cairo_line_to(cr, right - radius, top);
+    cairo_curve_to(cr, right - 7, top, right, top + 7, right, top + radius);
+    cairo_line_to(cr, right, bottom - radius);
+    cairo_curve_to(cr, right, bottom - 7, right - 7, bottom, right - radius, bottom);
+    cairo_line_to(cr, width - 58, bottom);
+    cairo_curve_to(cr, width - 59, bottom + 7, width - 62, bottom + 11, width - 69, bottom + 14);
+    cairo_curve_to(cr, width - 66, bottom + 6, width - 72, bottom + 1, width - 85, bottom);
+    cairo_line_to(cr, left + radius, bottom);
+    cairo_curve_to(cr, left + 7, bottom, left, bottom - 7, left, bottom - radius);
+    cairo_line_to(cr, left, top + radius);
+    cairo_curve_to(cr, left, top + 7, left + 7, top, left + radius, top);
+    cairo_close_path(cr);
+}
+
+static gboolean bubble_draw(GtkWidget *widget, cairo_t *cr, gpointer unused) {
+    (void)unused;
+    int width = gtk_widget_get_allocated_width(widget), height = gtk_widget_get_allocated_height(widget);
+    cairo_save(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE); cairo_set_source_rgba(cr, 0, 0, 0, 0); cairo_paint(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+    cairo_translate(cr, 0, 2);
+    for (int spread = 8; spread >= 2; spread -= 2) {
+        bubble_outline(cr, width, height);
+        cairo_set_source_rgba(cr, 0.15, 0.10, 0.07, 0.025);
+        cairo_set_line_width(cr, spread); cairo_stroke(cr);
+    }
+    cairo_translate(cr, 0, -2);
+    bubble_outline(cr, width, height);
+    cairo_set_source_rgb(cr, 1.0, 0.98, 0.94); cairo_fill_preserve(cr);
+    cairo_set_source_rgba(cr, 0.43, 0.34, 0.27, 0.24); cairo_set_line_width(cr, 1); cairo_stroke(cr);
+    cairo_restore(cr);
+    return FALSE;
+}
+
 static void update_bubble(void) {
-    char count[16]; g_snprintf(count, sizeof count, "%u", queue_count);
-    gtk_label_set_text(GTK_LABEL(count_label), count);
-    gtk_label_set_text(GTK_LABEL(summary_label), bubble_summary ? bubble_summary : "");
-    gtk_label_set_text(GTK_LABEL(kind_label), bubble_kind == BUBBLE_QUESTION ? "?" :
-        bubble_kind == BUBBLE_APPROVAL ? "✓" : "↳");
-    atk_object_set_name(gtk_widget_get_accessible(kind_label), bubble_kind == BUBBLE_QUESTION ? "Frage" :
+    gtk_label_set_text(GTK_LABEL(summary_label), visible_summary(bubble_summary));
+    atk_object_set_name(gtk_widget_get_accessible(kind_icon), bubble_kind == BUBBLE_QUESTION ? "Frage" :
         bubble_kind == BUBBLE_APPROVAL ? "Freigabe erforderlich" : "Ergebnis");
-    atk_object_set_name(gtk_widget_get_accessible(count_label), "Nachrichten in der Warteschlange");
+    atk_object_set_description(gtk_widget_get_accessible(summary_label), bubble_summary ? bubble_summary : "");
+    atk_object_set_description(gtk_widget_get_accessible(open_button), bubble_summary ? bubble_summary : "");
+    gtk_widget_set_tooltip_text(open_button, bubble_summary);
+    gtk_widget_queue_draw(kind_icon);
     gtk_widget_set_sensitive(open_button, !action_sent);
     gtk_widget_set_sensitive(dismiss_button, !action_sent);
     gtk_window_resize(GTK_WINDOW(bubble), 1, 1);
@@ -600,12 +745,12 @@ static GtkWidget *new_surface(const char *name) {
 }
 
 static void position_bubble(void) {
-    int width = MIN(360, expected.width - 28);
-    gtk_label_set_max_width_chars(GTK_LABEL(summary_label), MAX(18, (width - 32) / 10));
-    gtk_widget_set_size_request(summary_label, width - 32, 32);
+    int width = MIN(280, expected.width - 28);
+    gtk_label_set_max_width_chars(GTK_LABEL(summary_label), MAX(8, (width - 124) / 8));
+    gtk_widget_set_size_request(summary_label, MAX(24, width - 124), -1);
     gtk_widget_set_size_request(bubble, width, -1);
     gtk_layer_set_margin(GTK_WINDOW(bubble), GTK_LAYER_SHELL_EDGE_BOTTOM,
-        MIN(174, MAX(8, expected.height - 184)));
+        MIN(154, MAX(8, expected.height - 164)));
 }
 
 static void create_surfaces(void) {
@@ -621,34 +766,39 @@ static void create_surfaces(void) {
     g_signal_connect_after(drawing, "draw", G_CALLBACK(pet_painted), NULL);
 
     bubble = new_surface("weasel-pet-bubble");
-    GtkWidget *card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 7);
-    gtk_widget_set_name(card, "weasel-pet-card");
-    gtk_container_set_border_width(GTK_CONTAINER(card), 12);
-    gtk_container_add(GTK_CONTAINER(bubble), card);
-    GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    kind_label = gtk_label_new("?"); gtk_widget_set_name(kind_label, "pet-message-kind");
-    count_label = gtk_label_new("0"); gtk_widget_set_name(count_label, "pet-message-count");
-    stop_label = gtk_label_new("Alt + Esc · Stopp"); gtk_widget_set_name(stop_label, "pet-stop-hint");
-    gtk_box_pack_start(GTK_BOX(header), kind_label, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(header), count_label, FALSE, FALSE, 0);
-    gtk_box_pack_end(GTK_BOX(header), stop_label, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(card), header, FALSE, FALSE, 0);
+    g_signal_connect(bubble, "draw", G_CALLBACK(bubble_draw), NULL);
+    GtkWidget *content = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+    gtk_widget_set_margin_start(content, 20); gtk_widget_set_margin_end(content, 18);
+    gtk_widget_set_margin_top(content, 18); gtk_widget_set_margin_bottom(content, 34);
+    gtk_container_add(GTK_CONTAINER(bubble), content);
+    open_button = gtk_button_new(); gtk_widget_set_name(open_button, "pet-open");
+    GtkWidget *message = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_container_add(GTK_CONTAINER(open_button), message);
+    kind_icon = new_icon(ICON_KIND);
+    gtk_widget_set_valign(kind_icon, GTK_ALIGN_START);
+    gtk_box_pack_start(GTK_BOX(message), kind_icon, FALSE, FALSE, 0);
     summary_label = gtk_label_new("");
     gtk_label_set_xalign(GTK_LABEL(summary_label), 0);
     gtk_label_set_line_wrap(GTK_LABEL(summary_label), TRUE);
     gtk_label_set_line_wrap_mode(GTK_LABEL(summary_label), PANGO_WRAP_WORD_CHAR);
     gtk_label_set_ellipsize(GTK_LABEL(summary_label), PANGO_ELLIPSIZE_END);
-    gtk_label_set_lines(GTK_LABEL(summary_label), 4);
+    gtk_label_set_lines(GTK_LABEL(summary_label), 3);
     gtk_widget_set_name(summary_label, "pet-summary");
-    gtk_box_pack_start(GTK_BOX(card), summary_label, FALSE, FALSE, 0);
-    GtkWidget *actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    open_button = gtk_button_new_with_label("Öffnen");
-    dismiss_button = gtk_button_new_with_label("Ausblenden");
+    gtk_box_pack_start(GTK_BOX(message), summary_label, TRUE, TRUE, 0);
+    GtkWidget *arrow = new_icon(ICON_OPEN);
+    gtk_box_pack_end(GTK_BOX(message), arrow, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(content), open_button, TRUE, TRUE, 0);
+    dismiss_button = gtk_button_new(); gtk_widget_set_name(dismiss_button, "pet-dismiss");
+    gtk_container_add(GTK_CONTAINER(dismiss_button), new_icon(ICON_DISMISS));
+    gtk_widget_set_valign(dismiss_button, GTK_ALIGN_START);
     gtk_widget_set_can_focus(open_button, FALSE); gtk_widget_set_can_focus(dismiss_button, FALSE);
     gtk_widget_set_focus_on_click(open_button, FALSE); gtk_widget_set_focus_on_click(dismiss_button, FALSE);
-    gtk_box_pack_end(GTK_BOX(actions), dismiss_button, FALSE, FALSE, 0);
-    gtk_box_pack_end(GTK_BOX(actions), open_button, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(card), actions, FALSE, FALSE, 0);
+    atk_object_set_name(gtk_widget_get_accessible(open_button), "Nachricht im Thread öffnen");
+    atk_object_set_name(gtk_widget_get_accessible(dismiss_button), "Hinweis ausblenden");
+    atk_object_set_description(gtk_widget_get_accessible(dismiss_button),
+        "Blendet nur den Hinweis aus; beantwortet keine Frage und erteilt keine Freigabe.");
+    gtk_widget_set_tooltip_text(dismiss_button, "Ausblenden");
+    gtk_box_pack_end(GTK_BOX(content), dismiss_button, FALSE, FALSE, 0);
     g_signal_connect(open_button, "clicked", G_CALLBACK(bubble_action), "open");
     g_signal_connect(dismiss_button, "clicked", G_CALLBACK(bubble_action), "dismiss");
     position_bubble();
@@ -977,16 +1127,12 @@ int main(int argc, char **argv) {
     css = gtk_css_provider_new();
     const char *style =
         "#weasel-pet-body, #weasel-pet-bubble { background: transparent; border: none; padding: 0; margin: 0; }"
-        "#weasel-pet-card { background: #17262e; color: #edf4f1; border: 1px solid #536b73; border-radius: 17px; }"
-        "#weasel-pet-card label { color: #edf4f1; font: 13px sans-serif; }"
-        "#weasel-pet-card #pet-message-kind { color: #f4cd80; font-weight: bold; }"
-        "#weasel-pet-card #pet-message-count { color: #d4eae1; font-size: 11px; }"
-        "#weasel-pet-card #pet-stop-hint { color: #c0d2d4; font-size: 11px; }"
-        "#weasel-pet-card button { background: #25454d; color: #f3faf6; border: 1px solid #63818a;"
-        " border-radius: 8px; padding: 4px 10px; min-height: 20px; min-width: 0; box-shadow: none; text-shadow: none; font: 12px sans-serif; }"
-        "#weasel-pet-card button:hover { background: #35606a; }"
-        "#weasel-pet-card button:active { background: #193b44; }"
-        "#weasel-pet-card button:disabled { color: #b5c4c5; background: #24353c; }";
+        "#weasel-pet-bubble label { color: #493f38; font: 14px sans-serif; }"
+        "#weasel-pet-bubble button { background: transparent; border: none; padding: 0; margin: 0;"
+        " border-radius: 10px; min-height: 22px; min-width: 0; box-shadow: none; text-shadow: none; }"
+        "#weasel-pet-bubble button:hover { background: rgba(105, 78, 52, 0.07); }"
+        "#weasel-pet-bubble button:active { background: rgba(105, 78, 52, 0.13); }"
+        "#weasel-pet-bubble button:disabled { opacity: 0.5; }";
     GError *error = NULL;
     if (!gtk_css_provider_load_from_data(css, style, -1, &error)) {
         fprintf(stderr, "Pet style invalid\n"); g_clear_error(&error); return 5;

@@ -6,6 +6,16 @@ separate speech bubble accepts only its explicit buttons, and neither surface
 requests keyboard focus or reserves workspace. It never captures the desktop.
 The Python helper keeps the existing Actor task, release, Stop and paint fences.
 
+The warm speech bubble is at most 280 logical pixels wide, with three visible
+lines and a curved tail toward the pet. Its message and arrow open the original
+thread; the separate X only dismisses the reminder. There is no toolbar/header
+or visible action text. A question or unanswered shield marks pending input;
+only a result uses a check. The exact `Thread N · Question: ` / `Result: ` prefix
+is omitted from the visible preview, while the complete original remains in
+the tooltip and accessible description. Unknown prefixes are displayed as sent.
+Compact native eye state and the existing Alt+Esc keyboard hint remain separate
+from the message. The keyboard hint is not a clickable Stop control.
+
 Computer Use shows the pet for the task lifetime, including when Crew's persistent
 pet setting is off. Crew can separately start `weasel-desktop-pet --stdio` for an
 opt-in persistent companion; that preference defaults to off. A private same-user

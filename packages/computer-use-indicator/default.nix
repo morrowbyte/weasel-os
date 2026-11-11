@@ -23,6 +23,7 @@ stdenv.mkDerivation {
       ./assets/lumi/README.md
       ./monitor-match.h
       ./test-monitor-match.c
+      ./test-pet-presentation.c
       ./indicator.py
       ./companion.py
       ./pet_protocol.py
@@ -84,6 +85,9 @@ stdenv.mkDerivation {
     runHook preCheck
     $CC -std=c11 -O2 -Wall -Wextra -Werror test-monitor-match.c -o test-monitor-match
     ./test-monitor-match
+    $CC -std=c11 -O2 -Wall -Wextra -Werror test-pet-presentation.c -o test-pet-presentation \
+      $(pkg-config --cflags --libs gtk+-3.0 gtk-layer-shell-0) -lm
+    ./test-pet-presentation
     ${python3}/bin/python3 -m unittest -v test_pet_protocol
     ${python3}/bin/python3 -m unittest -v test_indicator.IndicatorLifecycle.test_crew_disconnect_or_invalid_first_projection_after_reattach_keeps_cu_scope
     ${python3}/bin/python3 -m unittest -v test_indicator.IndicatorLifecycle.test_focus_query_failure_retries_without_ending_cu_and_keeps_stop_reachable
