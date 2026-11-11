@@ -15,6 +15,13 @@ rustPlatform.buildRustPackage {
   cargoRoot = "core";
   buildAndTestSubdir = "core";
   cargoLock.lockFile = ./core/Cargo.lock;
+  # Cargo does not test path-dependency units when only the Core is selected.
+  cargoTestFlags = [
+    "--package"
+    "weasel-computer-use-core"
+    "--package"
+    "weasel-computer-use-pointer"
+  ];
   nativeBuildInputs = [ makeWrapper ];
   postInstall = ''
     mv "$out/bin/weasel-computer-use-core" "$out/bin/weasel-computer-use"

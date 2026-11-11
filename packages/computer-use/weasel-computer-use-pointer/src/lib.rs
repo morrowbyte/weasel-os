@@ -73,6 +73,58 @@ pub struct Capabilities {
 struct OutputEntry {
     info: OutputInfo,
     proxy: wl_output::WlOutput,
+    transform: OutputTransform,
+}
+
+#[derive(Default)]
+struct OutputTransform {
+    current: Option<WEnum<wl_output::Transform>>,
+    pending: Option<WEnum<wl_output::Transform>>,
+}
+
+impl OutputTransform {
+    fn confirmed(&self) -> Result<wl_output::Transform> {
+        if self.pending.is_some() {
+            return Err(PointerError(
+                "output transform update incomplete; observe again".into(),
+            ));
+        }
+        match self.current {
+            Some(WEnum::Value(transform)) => Ok(transform),
+            _ => Err(PointerError(
+                "known output transform required before pointer input".into(),
+            )),
+        }
+    }
+
+    fn commit(&mut self) {
+        if let Some(transform) = self.pending.take() {
+            self.current = Some(transform);
+        }
+    }
+}
+
+const ABSOLUTE_EXTENT: u32 = 1_000_000;
+
+/// The caller supplies normalized, displayed output coordinates. A named-output
+/// virtual pointer is transformed by the compositor, so send its inverse first.
+fn absolute_coordinates(transform: wl_output::Transform, x: f64, y: f64) -> Result<(u32, u32)> {
+    use wl_output::Transform;
+    let (x, y) = match transform {
+        Transform::Normal => (x, y),
+        Transform::_90 => (y, 1.0 - x),
+        Transform::_180 => (1.0 - x, 1.0 - y),
+        Transform::_270 => (1.0 - y, x),
+        Transform::Flipped => (1.0 - x, y),
+        Transform::Flipped90 => (y, x),
+        Transform::Flipped180 => (x, 1.0 - y),
+        Transform::Flipped270 => (1.0 - y, 1.0 - x),
+        _ => return Err(PointerError("unsupported output transform".into())),
+    };
+    Ok((
+        (x * ABSOLUTE_EXTENT as f64).round() as u32,
+        (y * ABSOLUTE_EXTENT as f64).round() as u32,
+    ))
 }
 #[derive(Default)]
 struct State {
@@ -129,6 +181,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                                     current_physical_size: None,
                                 },
                                 proxy,
+                                transform: OutputTransform::default(),
                             },
                         );
                     }
@@ -159,6 +212,10 @@ impl Dispatch<wl_output::WlOutput, u32> for State {
     ) {
         if let Some(output) = state.outputs.get_mut(id) {
             match event {
+                wl_output::Event::Geometry { transform, .. } => {
+                    output.transform.pending = Some(transform);
+                }
+                wl_output::Event::Done => output.transform.commit(),
                 wl_output::Event::Name { name } => output.info.name = Some(name),
                 wl_output::Event::Description { description } => {
                     output.info.description = Some(description)
@@ -366,8 +423,8 @@ impl Pointer {
             .ok_or_else(|| PointerError("active virtual pointer unavailable".into()))
     }
 
-    /// Move to output-local coordinates in the same coordinate frame as width/height.
-    /// Usually pass Niri logical output size, or a screenshot crop with matching extents.
+    /// Move to displayed output-local coordinates with full output width/height.
+    /// A screenshot crop must first be mapped back through its output-local origin.
     /// Fractional coordinates are retained by normalization; no guessed global origin.
     pub fn move_to(&mut self, output: &str, x: f64, y: f64, width: u32, height: u32) -> Result<()> {
         if width == 0
@@ -404,6 +461,11 @@ impl Pointer {
         if matches.next().is_some() {
             return Err(PointerError("output name is ambiguous".into()));
         }
+        let (nx, ny) = absolute_coordinates(
+            entry.transform.confirmed()?,
+            x / width as f64,
+            y / height as f64,
+        )?;
         let id = entry.info.global_id;
         if self.active_output != Some(id) && !self.held.is_empty() {
             return Err(PointerError(
@@ -428,11 +490,8 @@ impl Pointer {
             self.pointers.insert(id, pointer);
         }
         self.active_output = Some(id);
-        const EXTENT: u32 = 1_000_000;
-        let nx = ((x / width as f64) * EXTENT as f64).round() as u32;
-        let ny = ((y / height as f64) * EXTENT as f64).round() as u32;
         let pointer = self.active()?;
-        pointer.motion_absolute(self.time(), nx, ny, EXTENT, EXTENT);
+        pointer.motion_absolute(self.time(), nx, ny, ABSOLUTE_EXTENT, ABSOLUTE_EXTENT);
         pointer.frame();
         self.flush()
     }
@@ -609,5 +668,93 @@ impl Drop for Pointer {
             pointer.destroy();
         }
         let _ = self.connection.flush();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn displayed_point_has_expected_wire_coordinates_for_all_transforms() {
+        use wl_output::Transform::*;
+        let cases = [
+            (Normal, (200_000, 700_000)),
+            (_90, (700_000, 800_000)),
+            (_180, (800_000, 300_000)),
+            (_270, (300_000, 200_000)),
+            (Flipped, (800_000, 700_000)),
+            (Flipped90, (700_000, 200_000)),
+            (Flipped180, (200_000, 300_000)),
+            (Flipped270, (300_000, 800_000)),
+        ];
+        for (transform, expected) in cases {
+            assert_eq!(
+                absolute_coordinates(transform, 200.0 / 1000.0, 350.0 / 500.0).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn quantized_wire_coordinates_restore_displayed_pixels_at_fractional_and_edge_points() {
+        use wl_output::Transform::*;
+        // Independently specified compositor forward matrices in the unit square.
+        let cases = [
+            (Normal, [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+            (_90, [0.0, -1.0, 1.0, 0.0, 1.0, 0.0]),
+            (_180, [-1.0, 0.0, 0.0, -1.0, 1.0, 1.0]),
+            (_270, [0.0, 1.0, -1.0, 0.0, 0.0, 1.0]),
+            (Flipped, [-1.0, 0.0, 0.0, 1.0, 1.0, 0.0]),
+            (Flipped90, [0.0, 1.0, 1.0, 0.0, 0.0, 0.0]),
+            (Flipped180, [1.0, 0.0, 0.0, -1.0, 0.0, 1.0]),
+            (Flipped270, [0.0, -1.0, -1.0, 0.0, 1.0, 1.0]),
+        ];
+        let (width, height) = (1276.0, 773.0);
+        for (transform, [a, b, c, d, tx, ty]) in cases {
+            for (x, y) in [(0.0, 0.0), (1110.25, 570.125), (1275.75, 772.5)] {
+                let (wire_x, wire_y) =
+                    absolute_coordinates(transform, x / width, y / height).unwrap();
+                let (u, v) = (
+                    wire_x as f64 / ABSOLUTE_EXTENT as f64,
+                    wire_y as f64 / ABSOLUTE_EXTENT as f64,
+                );
+                let actual_x = (a * u + b * v + tx) * width;
+                let actual_y = (c * u + d * v + ty) * height;
+                assert!((actual_x - x).abs() <= width / (2.0 * ABSOLUTE_EXTENT as f64) + 1e-9);
+                assert!((actual_y - y).abs() <= height / (2.0 * ABSOLUTE_EXTENT as f64) + 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn r13_crop_target_is_sent_before_the_compositor_vertical_flip() {
+        // R13: fresh crop (500,400), target (610,170), full PNG 1276x773.
+        let (x, y) = (500.0 + 610.0, 400.0 + 170.0);
+        assert_eq!(
+            absolute_coordinates(wl_output::Transform::Flipped180, x / 1276.0, y / 773.0).unwrap(),
+            (869_906, 262_613)
+        );
+    }
+
+    #[test]
+    fn transform_requires_a_complete_known_output_event_group() {
+        let mut transform = OutputTransform::default();
+        assert!(transform.confirmed().is_err());
+        transform.pending = Some(WEnum::Value(wl_output::Transform::Normal));
+        assert!(transform.confirmed().is_err());
+        transform.commit();
+        assert_eq!(transform.confirmed().unwrap(), wl_output::Transform::Normal);
+        transform.pending = Some(WEnum::Value(wl_output::Transform::Flipped180));
+        assert!(transform.confirmed().is_err());
+        transform.commit();
+        assert_eq!(
+            transform.confirmed().unwrap(),
+            wl_output::Transform::Flipped180
+        );
+        transform.pending = Some(WEnum::Unknown(99));
+        assert!(transform.confirmed().is_err());
+        transform.commit();
+        assert!(transform.confirmed().is_err());
     }
 }
