@@ -25,18 +25,39 @@
 /.local/share/Steam/steamapps/downloading
 /.local/share/Steam/steamapps/shadercache
 /.local/share/Steam/steamapps/temp
+/.local/share/Steam/steamapps/workshop
+/.local/share/Steam/compatibilitytools.d
+/.local/share/Steam/steamrt64
+/.local/share/Steam/steamrt32
+/.local/share/Steam/package
+/.local/share/Steam/steamui
 /.local/share/Steam/depotcache
 /.local/share/Steam/logs
 /.local/share/Steam/appcache
 /.local/share/Steam/ubuntu12_32
 /.local/share/Steam/ubuntu12_64
 /.lmstudio/models
+/.ollama/models
+/.local/share/ollama/models
+/.local/share/factorio-companion/models
+/.local/share/factorio-companion/engine
+/.local/share/pnpm/store
+/.local/share/containers/storage
+/.local/share/docker
+/.config/google-chrome/OptGuideOnDeviceModel
+/.config/microsoft-edge/OptGuideOnDeviceModel
 /.vscode/extensions
 /.cursor/extensions
 /.codex/cache
 /.codex/node_repl
 /.t3/caches
 /.t3/tools
+# Crew profiles, databases, attachments, session histories and worktrees stay in
+# the backup. Only downloaded runtimes and caches are omitted here.
+/.t3-morrowbyte/caches
+/.t3-morrowbyte/tools
+/.local/share/t3code-weasel/caches
+/.local/share/t3code-weasel/tools
 **/node_modules
 **/target/debug
 **/target/release
@@ -59,6 +80,9 @@
 **/ShaderCache
 **/GrShaderCache
 **/DawnCache
+# Completed qualification checkouts are copies, not the original worktrees.
+# Keep the surrounding receipts and Crew state/database archives.
+/.local/state/development-orchestrator/ship-integration-20261015/*/checkout
 # No broad 'build', 'dist', 'bin', 'obj' exclusions: these can be real user data.
 
 # Retired Paperless raw database files remain locally for recovery. The verified,

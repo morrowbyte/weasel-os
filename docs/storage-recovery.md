@@ -139,31 +139,49 @@ CLI-Änderungen erneut mit einem echten Restore geprüft werden.
 * **Systemzustand nach Bedarf:** Erst innerhalb eines tatsächlichen System-Backups
   erstellt der Root-Helfer einen schreibgeschützten Root-Btrfs-Snapshot für
   `/etc`, `/root`, `/var/lib` und `/var/spool`. Installierte Flatpaks,
-  Nix-Verwaltung, Coredumps und Root-Caches sind von der Übertragung ausgenommen.
+  Nix-Verwaltung, Docker inklusive Volumes, Container-Speicher, Coredumps und
+  Root-Caches sind von der Übertragung ausgenommen.
   VM-Zustand und registrierte VM-Datenträger bleiben eingeschlossen. Der
   temporäre Snapshot wird auch nach Übertragungs-/Prüffehlern entfernt; der
   lebende Systemzustand bleibt erhalten. Der bisherige 02:30-Timer entfällt: Ein
   wartender Ganz-Root-Snapshot hatte gelöschte Store-/VM-Blöcke weiter festgehalten.
   Ein bewusst manuell erstellter Snapshot kann mit
   `sudo weasel-system-state-export cleanup` wieder entfernt werden.
-* **03:30 Uhr:** persönliches Home inklusive Dokumenten, Quellcode, Git-Historie,
+* **Montag bis Samstag 03:30 Uhr:** persönliches Home inklusive Dokumenten, Quellcode, Git-Historie,
   App-Zustand, Zugangsdaten, lokalen AI-/T3-Verläufen, Spielständen und Mods.
   Anschließend sichert ein Root-Restic-Prozess den frisch aufgenommenen
   Systemzustand direkt durch denselben Proton-Transport. Bis zu zehn Minuten
   Verzögerung; verpasste Läufe werden nachgeholt. Die Erfolgsmarkierung wird
-  erst nach beiden Datenbeständen und Repository-Check geschrieben.
+  erst nach beiden Datenbeständen und dem Zurücklesen ihrer konkreten Snapshot-IDs
+  geschrieben. Es gibt keinen täglichen Repository-Vollcheck.
+  Jeder Restic-Snapshot ist vollständig restaurierbar; nur neue oder veränderte
+  Datenblöcke werden übertragen. Es gibt keine separat einzuspielende Diff-Kette.
 * **Ausgenommen:** lokale Snapshots, temporäre Daten, bekannte Caches,
   installierte Steam-Spieldateien, Shadercache, heruntergeladene LM-Studio-Modelle,
-  `node_modules`, Rust-Debug-/Release-Artefakte und virtuelle Umgebungen.
+  `node_modules`, Rust-Debug-/Release-Artefakte und virtuelle Umgebungen. Ebenso
+  pnpm-Paketcache, Ollama-Modelle, heruntergeladene Chrome-/Edge-Modelle,
+  Steam-Client-/Proton-Laufzeiten und Workshop-Downloads. Die ursprünglichen
+  Crew-Worktrees bleiben erhalten; bekannte Kopien in alten Qualifikationsläufen
+  sind ausgenommen.
   Steam-`userdata`, `compatdata`, Saves und eigene Mods bleiben eingeschlossen.
   Keine pauschalen Ausschlüsse für `build`, `bin`, `dist` oder `obj`, weil dort
   auch eigene Dateien liegen können. Backup-Ausnahmen löschen lokal nichts.
-* **Sonntag 06:00 Uhr:** entfernte Datenstichprobe (5 %), dann Aufbewahrung von
+* **Sonntag 03:30 Uhr:** vollständiger Wochen-Wiederherstellungspunkt mit Tag
+  `weekly`, ebenfalls ohne erneutes Hochladen unveränderter Blöcke. Im selben
+  gesperrten Job folgt genau ein Repository-Check mit entfernter Datenstichprobe
+  (5 %), dann Aufbewahrung von
   sieben Tages-, vier Wochen- und drei Monatsständen und Entfernen der nicht
   mehr benötigten Repository-Objekte. Das beginnt erst nach erfolgreichem
   Erstbackup und echtem Restore-Nachweis. Keine fremden Drive-Dateien und kein
   accountweiter Papierkorb werden gelöscht.
-* **Lokal:** nur Restic-Metadaten-Cache und vorübergehende Upload-/Download-Packs,
+* **Crew:** aktuelle und ältere `statev2.sqlite` werden per SQLite-Online-Backup
+  einschließlich bereits bestätigter WAL-Änderungen in geschützte Zwischenkopien
+  exportiert. Nur die laufenden Original-DB-/WAL-/SHM-Dateien werden dabei ersetzt,
+  nicht Chats, Anhänge, Einstellungen, Sitzungsverläufe oder andere Crew-Dateien.
+  Der Restore-Befehl ordnet die konsistenten Kopien automatisch ihren ursprünglichen
+  Pfaden unter dem neuen Restore-Ziel zu. Zum anschließenden Übernehmen Crew beenden.
+* **Lokal:** Restic-Metadaten-Cache, vorübergehende Upload-/Download-Packs und die
+  während des Backups nötigen Crew-Datenbankkopien,
   keine vollständige zweite Kopie des Cloud-Repositorys. Abbrüche behalten keine
   Erfolgsmarkierung. Gleichzeitige Cloud-Jobs werden durch ein Lock verhindert.
 * **Fehler:** Desktop-Meldung; private Diagnose in
@@ -171,10 +189,10 @@ CLI-Änderungen erneut mit einem echten Restore geprüft werden.
   Betriebssystem-Keyring. Bei abgelaufener Sitzung oder gesperrtem Keyring kann
   eine erneute Browser-Anmeldung erforderlich sein; das wird nicht umgangen.
 
-Das Home wird im normalen Backup live gelesen. Restic meldet unlesbare oder
+Mit Ausnahme der genannten Crew-Datenbanken wird Home live gelesen. Restic meldet unlesbare oder
 während des Lesens problematische Dateien als fehlgeschlagenen Lauf. Für eine
 gezielte Wiederherstellung von Datenbanken die betreffende App vorher schließen;
-die Funktionsfähigkeit jeder laufenden Anwendung kann ein generischer Dateibackup
+die Funktionsfähigkeit jeder anderen laufenden Anwendung kann ein generischer Dateibackup
 nicht garantieren. Der Root-Snapshot ist ein konsistenter Dateisystemstand, ersetzt
 aber keine anwendungsspezifische Datenbankprüfung. Laufende VMs werden nur als
 Dateisystemstand gesichert; für einen garantiert sauberen VM-Stand die VM vorher
@@ -189,10 +207,13 @@ weasel-cloud-backup snapshots
 weasel-cloud-backup check
 ```
 
-`last-success.json` beweist einen abgeschlossenen Backup-Lauf, nicht allein einen
+`last-success.json` enthält die verifizierten IDs beider Datenbestände und beweist einen abgeschlossenen Backup-Lauf, nicht allein einen
 gestarteten Timer. Der Erstlauf kann je nach Datenmenge und Upload viele Stunden
 dauern. Bei zu wenig Drive-Kapazität schlägt er sichtbar fehl; es werden keine
-Credits oder Speicherabonnements gekauft.
+Credits oder Speicherabonnements gekauft. `last-maintain-success.json` wird erst
+nach erfolgreicher Sonntagsprüfung und Aufbewahrung aktualisiert. `weasel-cloud-backup
+probe` prüft einen kleinen echten Cloud-Restore; `check` ist die bewusst aufgerufene
+Repository-Prüfung und kein schneller Statusbefehl.
 
 ## Kleine Probleme lokal beheben
 

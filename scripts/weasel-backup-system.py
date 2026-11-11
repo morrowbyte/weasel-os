@@ -33,20 +33,20 @@ def create_snapshot():
         (STATE / 'ready.json').write_text(json.dumps({'time': time.time()}))
 
 
-def backup_snapshot(restic, env):
+def backup_snapshot(restic, env, cycle='daily'):
     # A whole-root snapshot pins Nix garbage and obsolete VM/coredump blocks.
     # Keep it only for the actual upload, including cleanup after upload errors.
     try:
         create_snapshot()
         source = str(SNAPSHOT)
-        command = [restic, '-o', 'rest.connections=1', 'backup', '--host', 'nixy-laptop',
-                   '--tag', 'system-state', '--pack-size', '32']
+        command = [restic, '-o', 'rest.connections=1', 'backup', '--json', '--host', 'nixy-laptop',
+                   '--tag', 'system-state', '--tag', cycle, '--group-by', 'host,paths', '--pack-size', '32']
         for item in ['var/lib/nix', 'var/lib/flatpak', 'var/lib/systemd/coredump',
-                     'var/lib/weasel-system-state', 'root/.cache', 'root/.npm']:
+                     'var/lib/weasel-system-state', 'var/lib/docker', 'var/lib/containers',
+                     'root/.cache', 'root/.npm', 'root/.local/share/pnpm/store', 'root/.ollama/models']:
             command += ['--exclude', source + '/' + item]
         command += [source + '/' + item for item in ['etc', 'root', 'var/lib', 'var/spool']]
         subprocess.run(command, env=env, check=True)
-        subprocess.run([restic, '-o', 'rest.connections=1', 'check'], env=env, check=True)
     finally:
         remove_snapshot()
 
@@ -99,7 +99,10 @@ def main():
                     raise RuntimeError('Private root-state restore proof failed')
             print('Private root-state cloud restore proof passed, including ownership and permissions')
             return
-        backup_snapshot(args.restic, env)
+        cycle = request.get('cycle', 'daily')
+        if cycle not in ('daily', 'weekly'):
+            raise RuntimeError('Invalid backup cycle')
+        backup_snapshot(args.restic, env, cycle)
         print('Mutable system-state backup completed; temporary root snapshot removed')
 
 

@@ -14,6 +14,9 @@ import time
 spec = importlib.util.spec_from_file_location('transport', Path(__file__).with_name('proton-restic-server.py'))
 transport = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(transport)
+spec = importlib.util.spec_from_file_location('crew_backup', Path(__file__).with_name('weasel-backup-crew.py'))
+crew = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(crew)
 
 
 def backup_excludes(source, patterns):
@@ -23,9 +26,31 @@ def backup_excludes(source, patterns):
                      for line in patterns.splitlines()) + '\n'
 
 
+def snapshot_id(output):
+    """Read the committed ID from Restic's successful JSON backup summary."""
+    for line in reversed(output.splitlines()):
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get('message_type') == 'summary' and row.get('snapshot_id'):
+            return row['snapshot_id']
+    raise RuntimeError('Backup completed without a committed snapshot ID')
+
+
+def verify_snapshot(restic, output, tag, cycle, source=None):
+    identifier = snapshot_id(output)
+    rows = json.loads(restic('snapshots', '--json', identifier))
+    if (len(rows) != 1 or not rows[0]['id'].startswith(identifier)
+            or not {tag, cycle}.issubset(rows[0].get('tags', []))
+            or (source is not None and str(source) not in rows[0].get('paths', []))):
+        raise RuntimeError('Committed backup snapshot could not be verified')
+    return rows[0]['id']
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('mode', choices=['probe', 'backup', 'snapshots', 'check', 'restore', 'maintain'])
+    p.add_argument('mode', choices=['probe', 'backup', 'weekly', 'snapshots', 'check', 'restore', 'maintain'])
     p.add_argument('--cli', default='proton-drive')
     p.add_argument('--restic', default='restic')
     p.add_argument('--excludes', type=Path, required=True)
@@ -70,7 +95,7 @@ def main():
                 if (Path(tmp) / key_name).read_bytes() != password.read_bytes():
                     raise RuntimeError('Cloud recovery password does not match local private store')
             token = secrets.token_urlsafe(32)
-            server = transport.serve(drive, token, allow_delete=args.mode == 'maintain')
+            server = transport.serve(drive, token, allow_delete=args.mode in ('maintain', 'weekly'))
             env = dict(os.environ, RESTIC_REPOSITORY=f'rest:http://weasel:{token}@127.0.0.1:{server.server_port}/',
                        RESTIC_PASSWORD_FILE=str(password), RESTIC_CACHE_DIR=str(state / 'restic-cache'))
 
@@ -79,6 +104,7 @@ def main():
                                         env=env, capture_output=True, text=True)
                 # Logs are private; command line/environment never logged here.
                 (state / 'last-restic.log').write_text(result.stdout + result.stderr)
+                (state / ('last-' + command[0] + '.log')).write_text(result.stdout + result.stderr)
                 if result.returncode:
                     raise RuntimeError('restic failed (exit ' + str(result.returncode) + '); see private last-restic.log')
                 return result.stdout
@@ -99,14 +125,13 @@ def main():
                         (source / 'proof.bin').write_bytes(payload)
                         (source / 'link').symlink_to('proof.bin')
                         restic('backup', '--tag', 'restore-proof', '--host', 'nixy-laptop', str(source))
-                        restic('check', '--read-data')
                         destination = Path(tmp) / 'restored'
                         restic('restore', 'latest', '--tag', 'restore-proof', '--target', str(destination))
                         restored = destination / str(source).lstrip('/')
                         if (restored / 'proof.bin').read_bytes() != payload or os.readlink(restored / 'link') != 'proof.bin':
                             raise RuntimeError('Cloud restore proof failed')
                     (state / 'restore-proof.json').write_text(json.dumps({'time': time.time(), 'ok': True}))
-                    print('Cloud backup restore proof passed: full remote read, byte equality and symlink preservation')
+                    print('Cloud restore proof passed: test payload equality and symlink preservation')
                     if args.probe_system:
                         result = subprocess.run(['sudo', '-n', '/run/current-system/sw/bin/weasel-system-state-export', 'probe'],
                                                 input=json.dumps({'repository': env['RESTIC_REPOSITORY']}), capture_output=True, text=True)
@@ -114,41 +139,62 @@ def main():
                         if result.returncode:
                             raise RuntimeError('Private root-state restore proof failed; see private last-system-restic.log')
                         print('Private root-state restore proof passed, including owner root and mode 0600')
-                elif args.mode == 'backup':
-                    restic('backup', '--host', 'nixy-laptop', '--tag', 'personal-state',
-                           '--exclude-file', str(excludes), '--pack-size', '32', str(args.source))
+                elif args.mode in ('backup', 'weekly'):
+                    cycle = 'weekly' if args.mode == 'weekly' else 'daily'
+                    # Every Restic snapshot is a complete restore point. Weekly
+                    # tags do not force a redundant upload of unchanged blocks.
+                    with crew.prepare(args.source) as extra_excludes:
+                        excludes.write_text(backup_excludes(args.source, args.excludes.read_text()
+                                                           + '\n' + '\n'.join(extra_excludes)))
+                        output = restic('backup', '--json', '--host', 'nixy-laptop',
+                                        '--tag', 'personal-state', '--tag', cycle, '--group-by', 'host,paths',
+                                        '--exclude-file', str(excludes), '--pack-size', '32', str(args.source))
+                        snapshots = {'personal-state': verify_snapshot(restic, output, 'personal-state',
+                                                                        cycle, args.source)}
                     if args.source == Path.home():
                         # The token travels through stdin, not process arguments,
                         # a public environment file or the root journal.
                         result = subprocess.run(['sudo', '-n', '/run/current-system/sw/bin/weasel-system-state-export', 'backup'],
-                                                input=json.dumps({'repository': env['RESTIC_REPOSITORY']}),
+                                                input=json.dumps({'repository': env['RESTIC_REPOSITORY'],
+                                                                  'cycle': cycle}),
                                                 capture_output=True, text=True)
                         (state / 'last-system-restic.log').write_text(result.stdout + result.stderr)
                         if result.returncode:
                             raise RuntimeError('Mutable system-state backup failed; see private last-system-restic.log')
-                    restic('check')
+                        snapshots['system-state'] = verify_snapshot(restic, result.stdout, 'system-state', cycle)
                     (state / 'last-success.json').write_text(json.dumps({'time': time.time(), 'ok': True,
-                                                                       'source': str(args.source)}))
-                    print('Cloud backup completed; repository structural check passed')
+                                                                       'source': str(args.source),
+                                                                       'cycle': cycle, 'snapshots': snapshots}))
+                    print('Cloud backup completed; committed snapshots verified (' + cycle + ')')
+                    if args.mode == 'weekly':
+                        maintain(restic, state)
                 elif args.mode == 'check':
                     restic('check', '--read-data-subset', '5%')
                     print('Repository check with remote data sample passed')
                 elif args.mode == 'maintain':
-                    if not (state / 'last-success.json').exists() or not (state / 'restore-proof.json').exists():
-                        raise RuntimeError('Retention needs a successful backup and restore proof first')
-                    restic('check', '--read-data-subset', '5%')
-                    restic('forget', '--tag', 'personal-state', '--tag', 'system-state', '--group-by', 'host,paths',
-                           '--keep-daily', '7', '--keep-weekly', '4', '--keep-monthly', '3', '--prune')
-                    print('Cloud retention completed')
+                    maintain(restic, state)
                 elif args.mode == 'snapshots':
                     print(restic('snapshots', '--tag', args.tag))
                 elif args.mode == 'restore':
                     if not args.target or args.target.exists():
                         raise RuntimeError('Restore requires a new, absent --target directory')
                     print(restic('restore', args.snapshot, '--tag', args.tag, '--target', str(args.target)))
+                    if args.tag == 'personal-state':
+                        crew.restore(args.target, args.source)
             finally:
                 server.shutdown()
                 server.server_close()
+
+
+def maintain(restic, state):
+    if not (state / 'last-success.json').exists() or not (state / 'restore-proof.json').exists():
+        raise RuntimeError('Retention needs a successful backup and restore proof first')
+    # One weekly structural check with a remote data sample, before retention.
+    restic('check', '--read-data-subset', '5%')
+    restic('forget', '--tag', 'personal-state', '--tag', 'system-state', '--group-by', 'host,paths',
+           '--keep-daily', '7', '--keep-weekly', '4', '--keep-monthly', '3', '--prune')
+    (state / 'last-maintain-success.json').write_text(json.dumps({'time': time.time(), 'ok': True}))
+    print('Weekly repository check and retention completed')
 
 
 if __name__ == '__main__':
