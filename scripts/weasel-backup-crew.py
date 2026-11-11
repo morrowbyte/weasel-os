@@ -91,6 +91,10 @@ def prepare(home):
             source_db = sqlite3.connect(original.as_uri() + '?mode=ro', uri=True)
             target_db = sqlite3.connect(target)
             try:
+                # Pin one read snapshot. Otherwise active Crew writes restart
+                # every incremental backup step; WAL writers can keep running.
+                source_db.execute('BEGIN')
+                source_db.execute('SELECT count(*) FROM sqlite_schema').fetchone()
                 source_db.backup(target_db, pages=1024, progress=progress)
             finally:
                 target_db.close()

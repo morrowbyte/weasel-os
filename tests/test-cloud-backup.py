@@ -19,6 +19,58 @@ spec.loader.exec_module(cloud)
 
 
 class BackupTests(unittest.TestCase):
+    def test_crew_copy_finishes_while_other_connection_keeps_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            database = home / cloud.crew.DATABASES[0]
+            database.parent.mkdir(parents=True)
+            connect = sqlite3.connect
+            writer = connect(database)
+            writer.execute('PRAGMA journal_mode=WAL')
+            writer.execute('CREATE TABLE version (value INTEGER)')
+            writer.execute('INSERT INTO version VALUES (0)')
+            writer.execute('CREATE TABLE payload (data BLOB)')
+            writer.executemany('INSERT INTO payload VALUES (zeroblob(8192))', [()] * 600)
+            writer.commit()
+            admit = home / '.local/libexec/agent-storage-admit'
+            admit.parent.mkdir(parents=True)
+            admit.write_text('#!/bin/sh\nprintf \'{"allowed":true}\\n\'\n')
+            admit.chmod(0o700)
+            writes = []
+
+            class WritingDuringCopy(sqlite3.Connection):
+                def backup(self, target, **kwargs):
+                    progress = kwargs['progress']
+
+                    def write_between_steps(status, remaining, total):
+                        if remaining:
+                            if len(writes) >= 8:
+                                raise AssertionError('Concurrent writes repeatedly restarted the copy')
+                            writer.execute('UPDATE version SET value = value + 1')
+                            writer.commit()
+                            writes.append(remaining)
+                        progress(status, remaining, total)
+
+                    kwargs['progress'] = write_between_steps
+                    return super().backup(target, **kwargs)
+
+            def source_connection(path, **kwargs):
+                if kwargs.get('uri'):
+                    kwargs['factory'] = WritingDuringCopy
+                return connect(path, **kwargs)
+
+            try:
+                with patch.object(cloud.crew.sqlite3, 'connect', side_effect=source_connection):
+                    with cloud.crew.prepare(home):
+                        copies = list((home / '.local/share/weasel-backup').glob('crew-*'))
+                        with connect(copies[0] / cloud.crew.DATABASES[0]) as copied:
+                            self.assertEqual(copied.execute('SELECT value FROM version').fetchone(), (0,))
+                            self.assertEqual(copied.execute('SELECT count(*) FROM payload').fetchone(), (600,))
+                self.assertGreater(len(writes), 0, 'The test must write during the actual copy')
+                self.assertEqual(writer.execute('SELECT value FROM version').fetchone(), (len(writes),))
+            finally:
+                writer.close()
+
     def test_failed_snapshot_readback_is_not_success(self):
         output = json.dumps({'message_type': 'summary', 'snapshot_id': 'a' * 64})
         with self.assertRaises(RuntimeError):
