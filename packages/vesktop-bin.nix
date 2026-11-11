@@ -13,11 +13,11 @@
 
 let
   pname = "vesktop";
-  version = "1.6.8";
+  version = "1.6.9";
 
   src = fetchurl {
     url = "https://github.com/Vencord/Vesktop/releases/download/v${version}/Vesktop-${version}.AppImage";
-    hash = "sha256-F1dCbZN6aYeuQwbnT6wv5tPE69SoiVzjrWxu585hDYQ=";
+    hash = "sha256-342qRnKXo4Mb2KRdzgHHezewBC+2FvqJQBt1tl0hH+8=";
   };
 
   appimageContents = appimageTools.extractType2 {
@@ -71,10 +71,10 @@ let
     '';
   };
 
-  # Vesktop 1.6.8 asks its renderer to open a second, custom picker after
+  # Vesktop 1.6.9 asks its renderer to open a second, custom picker after
   # xdg-desktop-portal has already selected a Wayland source.  When that
-  # renderer command rejects, the error is swallowed and Electron receives an
-  # empty capture result.  Keep the working portal source and hand it directly
+  # renderer command rejects, Electron still receives a cancelled result.
+  # Keep the working portal source and hand it directly
   # to Electron instead.  The patcher deliberately checks the exact bundled
   # code so a future Vesktop update cannot silently lose this workaround.
   patchedAppimageContents =
@@ -92,11 +92,12 @@ let
 
         mkdir app
         asar extract "$out/resources/app.asar" app
-        # The 1.6.8 bundle only renames this handler's Wayland flag (vy -> Iy).
-        # Retain the existing exact-one-match patch and the same capture behavior.
+        # Bind the exact 1.6.9 portal branch, including its null cancellation result.
+        # Leave the origin guard and the non-Wayland picker unchanged.
         substitute ${../scripts/patch-vesktop-wayland-capture.mjs} patch-vesktop-wayland-capture.mjs \
-          --replace-fail 'if(vy){let c=i[0];' 'if(Iy){let c=i[0];' \
-          --replace-fail 'Vesktop 1.6.7' 'Vesktop 1.6.8'
+          --replace-fail 'if(vy){let c=i[0];if(c&&await it("screenshare:picker",{screens:[c],skipPicker:!0}).catch(()=>null)===null)return t({});t(c?{video:n[0]}:{});return}' 'if(kS){let l=i[0];if(l&&await Je("screenshare:picker",{screens:[l],skipPicker:!0}).catch(c=>(console.error("Error during screenshare picker",c),null))===null)return t(null);t(l?{video:n[0]}:null);return}' \
+          --replace-fail 'if(vy){let c=i[0];t(c?{video:n[0]}:{});return}' 'if(kS){let l=i[0];t(l?{video:n[0]}:null);return}' \
+          --replace-fail 'Vesktop 1.6.7' 'Vesktop 1.6.9'
         node patch-vesktop-wayland-capture.mjs app/dist/js/main.js
 
         rm -f "$out/resources/app.asar"
