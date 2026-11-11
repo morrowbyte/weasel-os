@@ -34,13 +34,20 @@ class LifecycleTests(unittest.TestCase):
         return events
 
     def test_success_releases_snapshot(self):
-        self.assertEqual(self.run_backup(), ['create', 'upload', 'check', 'remove'])
+        self.assertEqual(self.run_backup(), ['create', 'upload', 'remove'])
 
     def test_upload_failure_releases_snapshot(self):
         self.assertEqual(self.run_backup('upload'), ['create', 'upload', 'remove'])
 
-    def test_check_failure_releases_snapshot(self):
-        self.assertEqual(self.run_backup('check'), ['create', 'upload', 'check', 'remove'])
+    def test_excludes_docker_and_keeps_system_paths(self):
+        commands = []
+        with patch.object(backup, 'create_snapshot'), patch.object(backup, 'remove_snapshot'), \
+                patch.object(backup.subprocess, 'run', side_effect=lambda command, **kw: commands.append(command)):
+            backup.backup_snapshot('restic', {}, 'weekly')
+        self.assertEqual(len(commands), 1)
+        self.assertIn(str(backup.SNAPSHOT / 'var/lib/docker'), commands[0])
+        self.assertIn(str(backup.SNAPSHOT / 'etc'), commands[0])
+        self.assertIn('weekly', commands[0])
 
     def test_partial_creation_failure_releases_snapshot(self):
         with patch.object(backup, 'create_snapshot', side_effect=OSError('readiness write failed')), \

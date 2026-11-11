@@ -5,6 +5,7 @@ let
     mkdir -p "$out"
     cp ${../scripts/weasel-cloud-backup.py} "$out/weasel-cloud-backup.py"
     cp ${../scripts/proton-restic-server.py} "$out/proton-restic-server.py"
+    cp ${../scripts/weasel-backup-crew.py} "$out/weasel-backup-crew.py"
   '';
   backup = pkgs.writeShellApplication {
     name = "weasel-cloud-backup";
@@ -22,7 +23,7 @@ let
   job = mode: {
     Unit = {
       Description = "Proton Drive ${mode} of personal files and mutable state";
-      After = [ "dbus.socket" ];
+      After = [ "dbus.socket" ] ++ pkgs.lib.optional (mode == "weekly") "weasel-cloud-backup.service";
       Wants = [ "dbus.socket" ];
       OnFailure = [ "weasel-cloud-backup-notify.service" ];
     };
@@ -48,7 +49,7 @@ in
     backup
   ];
   systemd.user.services.weasel-cloud-backup = job "backup";
-  systemd.user.services.weasel-cloud-backup-maintain = job "maintain";
+  systemd.user.services.weasel-cloud-backup-maintain = job "weekly";
   systemd.user.services.weasel-cloud-backup-notify = {
     Unit.Description = "Report failed cloud backup on the laptop desktop";
     Service = {
@@ -57,18 +58,18 @@ in
     };
   };
   systemd.user.timers.weasel-cloud-backup = {
-    Unit.Description = "Daily personal and state backup to Proton Drive";
+    Unit.Description = "Monday to Saturday incremental Proton Drive backup";
     Timer = {
-      OnCalendar = "*-*-* 03:30:00";
+      OnCalendar = "Mon..Sat *-*-* 03:30:00";
       Persistent = true;
       RandomizedDelaySec = "10m";
     };
     Install.WantedBy = [ "timers.target" ];
   };
   systemd.user.timers.weasel-cloud-backup-maintain = {
-    Unit.Description = "Weekly verification and cloud backup retention";
+    Unit.Description = "Sunday restore point, verification and cloud backup retention";
     Timer = {
-      OnCalendar = "Sun *-*-* 06:00:00";
+      OnCalendar = "Sun *-*-* 03:30:00";
       Persistent = true;
     };
     Install.WantedBy = [ "timers.target" ];
