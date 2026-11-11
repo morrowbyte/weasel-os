@@ -5,8 +5,12 @@ from pathlib import Path
 import re
 import stat
 import struct
+import subprocess
 
 STATES = ("idle", "working", "reading", "lookingAway", "waiting", "attention", "success", "error")
+SPECIES = ("weasel", "dog", "cat", "fox", "otter", "raccoon", "owl", "raven", "red-panda", "capybara", "bear", "turtle")
+# Fixed install paths; missing packs are never advertised.
+BUILTIN_PACKS = {"weasel": ("sudo", "sudo")}
 TOKEN = re.compile(r"[A-Za-z0-9_.-]{1,128}\Z")
 MAX_LINE = 16384
 MAX_PACK_BYTES = 16 * 1024 * 1024
@@ -35,14 +39,36 @@ def exact(value, required, optional=()):
         raise ProtocolError("invalid_fields")
 
 
+def species(value):
+    if not isinstance(value, str) or value not in SPECIES:
+        raise ProtocolError("invalid_species")
+    return value
+
+
+def validate_builtin_pets(value):
+    if not isinstance(value, list) or len(value) > len(SPECIES):
+        raise ProtocolError("invalid_builtin_pets")
+    seen = set()
+    for pet in value:
+        exact(pet, ("species", "name"))
+        identity = species(pet["species"])
+        if identity in seen:
+            raise ProtocolError("invalid_builtin_pets")
+        seen.add(identity)
+        text(pet["name"], 60)
+    return value
+
+
 def validate_message(value):
     if not isinstance(value, dict) or type(value.get("v")) is not int or value["v"] != 1:
         raise ProtocolError("unsupported_protocol")
     kind = value.get("type")
     if kind == "configure":
-        exact(value, ("v", "type", "persistent", "visible", "reducedMotion", "petPath"))
+        exact(value, ("v", "type", "persistent", "visible", "reducedMotion", "petPath"), ("preferredSpecies",))
         if any(type(value[k]) is not bool for k in ("persistent", "visible", "reducedMotion")):
             raise ProtocolError("invalid_configuration")
+        if value.get("preferredSpecies") is not None:
+            species(value["preferredSpecies"])
         if value["petPath"] is not None:
             text(value["petPath"], 4096)
             if not Path(value["petPath"]).is_absolute():
@@ -115,6 +141,36 @@ def validate_pack(directory):
     if (png_width, png_height) != (width * 4, height * 8) or depth != 8 or color != 6 or compression or filtering or interlace not in (0, 1):
         raise ProtocolError("invalid_pet_dimensions_or_alpha")
     return {"name": metadata["name"], "sheet": str(root / "pet.png"), "frameWidth": width, "frameHeight": height}
+
+
+def decode_pack(directory, renderer_path):
+    """Apply metadata bounds before using the renderer's real PNG decoder."""
+    pack = validate_pack(directory)
+    try:
+        decoded = subprocess.run(
+            [renderer_path, "--validate-sheet", pack["sheet"], str(pack["frameWidth"]), str(pack["frameHeight"])],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=2, check=False)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ProtocolError("invalid_pet_png") from error
+    if decoded.returncode != 0:
+        raise ProtocolError("invalid_pet_png")
+    return pack
+
+
+def load_builtin_packs(renderer_path):
+    """One bounded startup snapshot; heartbeats and projections never decode."""
+    root = Path(os.environ.get("WEASEL_PET_BUILTIN_ROOT", str(Path(__file__).resolve().parent / "assets")))
+    packs = {}
+    for identity, (directory, name) in BUILTIN_PACKS.items():
+        try:
+            pack = decode_pack(root / directory, renderer_path)
+            if pack["name"] != name:
+                continue
+        except (OSError, ValueError):
+            continue
+        packs[identity] = pack
+    return packs
 
 
 class Projection:

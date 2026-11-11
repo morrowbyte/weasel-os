@@ -25,7 +25,7 @@ def render_commands(commands):
         if not isinstance(command, str) or len(command) > MAX_LINE or "\n" in command or "\r" in command:
             raise ProtocolError("invalid_render_projection")
         parts = command.split(" ")
-        valid = command in ("v1 bubble clear", "v1 motion full", "v1 motion reduced", "v1 asset default")
+        valid = command in ("v1 bubble clear", "v1 motion full", "v1 motion reduced", "v1 asset default", "v1 asset none")
         if len(parts) == 3 and parts[:2] in (["v1", "working"], ["v1", "count"]):
             valid = parts[2].isascii() and parts[2].isdigit() and 0 <= int(parts[2]) <= 10000
         elif len(parts) == 5 and parts[:2] == ["v1", "bubble"]:

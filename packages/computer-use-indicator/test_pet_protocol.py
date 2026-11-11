@@ -10,13 +10,14 @@ import zlib
 import selectors
 import select
 import socket
+import subprocess
 import sys
 import time
 from unittest import mock
 
 from pet_bridge import render_commands
-from pet_protocol import (Projection, ProtocolError, STATES, read_regular,
-                          text, validate_message, validate_pack)
+from pet_protocol import (Projection, ProtocolError, SPECIES, STATES, decode_pack, load_builtin_packs,
+                          read_regular, text, validate_builtin_pets, validate_message, validate_pack)
 from indicator import CapabilityError, RendererEvents, process_start_ticks
 from companion import Companion, focus_output
 from output_probe import FocusProbe, FocusProbeError
@@ -35,6 +36,39 @@ def png(width=256, height=512):
         return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload))
     return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)) +
             chunk(b"IDAT", zlib.compress((b"\0" + bytes(width * 4)) * height)) + chunk(b"IEND", b""))
+
+
+def write_pack(root, name="sudo"):
+    root.mkdir(parents=True, exist_ok=True)
+    metadata = {"schema": 1, "name": name, "frameWidth": 64, "frameHeight": 64, "sheet": "pet.png",
+                "states": {state: {"row": i, "frames": 4, "fps": 6, "loop": False} for i, state in enumerate(STATES)}}
+    (root / "pet.json").write_text(json.dumps(metadata))
+    (root / "pet.png").write_bytes(png())
+    return root
+
+
+def configure(**fields):
+    return {"v": 1, "type": "configure", "persistent": False, "visible": True,
+            "reducedMotion": False, "petPath": None, **fields}
+
+
+def selection_companion(packs):
+    # Selection tests have no desktop, Actor or socket side effects.
+    companion = Companion.__new__(Companion)
+    companion.renderer_path = "/test/renderer"
+    companion.builtin_packs = packs
+    companion.config = {key: value for key, value in configure(preferredSpecies=None).items() if key not in ("v", "type")}
+    companion.pack, companion.character = companion.select_character(companion.config)
+    companion.last_unavailable_species = None
+    companion.projection = Projection()
+    companion.renderer_failed = False
+    companion.stop = False
+    companion.feed_open = True
+    companion.live_task = True
+    companion.cu_peer = object()
+    companion.close_renderer = mock.Mock()
+    companion.project = mock.Mock()
+    return companion
 
 
 class ProtocolTests(unittest.TestCase):
@@ -74,7 +108,7 @@ class ProtocolTests(unittest.TestCase):
         sent = []
         companion.command = sent.append
         companion.project(force=True)
-        self.assertIn("v1 asset default", sent)
+        self.assertIn("v1 asset none", sent)
         sent.clear()
         companion.projection.working = 3
         companion.project()
@@ -200,7 +234,7 @@ class ProtocolTests(unittest.TestCase):
                             probe.close()
 
     def test_projection_rejects_authority_fields_and_secret_payload_channels(self):
-        for field in ("observationMode", "observationActive", "phase", "windowTitle", "payload"):
+        for field in ("observationMode", "observationActive", "phase", "windowTitle", "payload", "preferredSpecies", "character"):
             with self.subTest(field=field), self.assertRaises(ProtocolError):
                 validate_message({**projection(), field: "disabled"})
 
@@ -233,8 +267,11 @@ class ProtocolTests(unittest.TestCase):
             with self.subTest(command=command), self.assertRaises(ProtocolError):
                 render_commands([command])
         summary = base64.b64encode("Freigabe wartet.".encode()).decode()
-        commands = ["v1 working 2", "v1 count 1", "v1 motion reduced", f"v1 bubble approval opaque-1 {summary}"]
+        commands = ["v1 working 2", "v1 count 1", "v1 motion reduced", f"v1 bubble approval opaque-1 {summary}", "v1 asset none"]
         self.assertEqual(render_commands(commands), commands)
+        for command in ("v1 asset none extra", "v1 asset None", "v1 asset none\nv1 end", "v1 asset none "):
+            with self.subTest(command=command), self.assertRaises(ProtocolError):
+                render_commands([command])
 
     def test_pack_rejects_path_escape_symlink_and_fifo(self):
         with tempfile.TemporaryDirectory(prefix="pet-protocol-") as directory:
@@ -254,6 +291,202 @@ class ProtocolTests(unittest.TestCase):
             os.mkfifo(root / "fifo")
             with self.assertRaises(ProtocolError):
                 read_regular(root / "fifo", 16000000)
+
+
+class PetSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.sudo = {"name": "sudo", "sheet": "/test/sudo/pet.png", "frameWidth": 64, "frameHeight": 64}
+
+    def test_configure_accepts_legacy_null_and_only_fixed_species(self):
+        self.assertEqual(validate_message(configure()), configure())
+        for identity in (None, *SPECIES):
+            with self.subTest(identity=identity):
+                self.assertEqual(validate_message(configure(preferredSpecies=identity))["preferredSpecies"], identity)
+        for identity in ("sudo", "Weasel", "lumi", "../dog", "https://pets/dog", "", True, 1, [], {}):
+            with self.subTest(identity=identity), self.assertRaises(ProtocolError):
+                validate_message(configure(preferredSpecies=identity))
+        for field in ("species", "builtinPets", "character", "observationMode", "phase"):
+            with self.subTest(field=field), self.assertRaises(ProtocolError):
+                validate_message(configure(**{field: None}))
+
+    def test_capabilities_are_bounded_unique_exact_and_named_safely(self):
+        self.assertEqual(validate_builtin_pets([]), [])
+        available = [{"species": identity, "name": identity} for identity in SPECIES]
+        self.assertEqual(validate_builtin_pets(available), available)
+        invalid = [None, {}, available + available[:1], available[:1] * 2,
+                   [{"species": "sudo", "name": "sudo"}], [{"species": None, "name": "sudo"}],
+                   [{"species": "weasel"}], [{"species": "weasel", "name": "sudo", "path": "/tmp"}]]
+        for name in (None, "", " ", "x" * 61, "su\ndo", "su\x00do", "su\x7fdo", "su\u0085do",
+                     *("su" + control + "do" for control in "\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")):
+            invalid.append([{"species": "weasel", "name": name}])
+        for value in invalid:
+            with self.subTest(value=value), self.assertRaises(ProtocolError):
+                validate_builtin_pets(value)
+        self.assertEqual(validate_builtin_pets([{"species": "weasel", "name": "x" * 60}])[0]["name"], "x" * 60)
+
+    def test_catalog_uses_fixed_sudo_path_and_only_validated_available_packs(self):
+        with tempfile.TemporaryDirectory(prefix="pet-catalog-") as directory:
+            root = Path(directory)
+            write_pack(root / "dog", "dog")
+            write_pack(root / "lumi", "lumi")
+            with mock.patch.dict(os.environ, {"WEASEL_PET_BUILTIN_ROOT": directory}):
+                self.assertEqual(load_builtin_packs("/test/renderer"), {})
+                write_pack(root / "sudo")
+                with mock.patch("pet_protocol.subprocess.run", return_value=mock.Mock(returncode=0)) as decoder:
+                    packs = load_builtin_packs("/test/renderer")
+                self.assertEqual(list(packs), ["weasel"])
+                self.assertEqual(packs["weasel"]["name"], "sudo")
+                self.assertEqual(decoder.call_args.args[0], ["/test/renderer", "--validate-sheet", str(root / "sudo/pet.png"), "64", "64"])
+                self.assertEqual(decoder.call_args.kwargs["timeout"], 2)
+                with mock.patch("pet_protocol.subprocess.run", return_value=mock.Mock(returncode=5)):
+                    self.assertEqual(load_builtin_packs("/test/renderer"), {})
+                with mock.patch("pet_protocol.subprocess.run", side_effect=subprocess.TimeoutExpired("renderer", 2)):
+                    self.assertEqual(load_builtin_packs("/test/renderer"), {})
+                write_pack(root / "sudo", "lumi")
+                with mock.patch("pet_protocol.subprocess.run", return_value=mock.Mock(returncode=0)):
+                    self.assertEqual(load_builtin_packs("/test/renderer"), {})
+
+    def test_pack_names_and_bounds_fail_before_decode(self):
+        with tempfile.TemporaryDirectory(prefix="pet-bounds-") as directory:
+            root = Path(directory)
+            for name in ("sudo\n", "sudo\u202e", "sudo\u2069", "x" * 61):
+                with self.subTest(name=name):
+                    write_pack(root, name)
+                    with mock.patch("pet_protocol.subprocess.run") as decoder, self.assertRaises(ProtocolError):
+                        decode_pack(root, "/test/renderer")
+                    decoder.assert_not_called()
+            write_pack(root)
+            data = png()
+            (root / "pet.png").write_bytes(data[:16] + struct.pack(">I", 2**31) + data[20:])
+            with mock.patch("pet_protocol.subprocess.run") as decoder, self.assertRaises(ProtocolError):
+                decode_pack(root, "/test/renderer")
+            decoder.assert_not_called()
+
+    def test_default_is_sudo_and_legacy_configure_clears_prior_preference(self):
+        companion = selection_companion({"weasel": self.sudo})
+        self.assertEqual(companion.character, {"source": "builtin", "requestedSpecies": None, "species": "weasel", "name": "sudo"})
+        with mock.patch("companion.emit"):
+            companion.input_message(configure(preferredSpecies="dog"))
+            companion.input_message(configure())
+        self.assertEqual(companion.pack, self.sudo)
+        self.assertEqual(companion.character["source"], "builtin")
+        self.assertIsNone(companion.character["requestedSpecies"])
+        self.assertFalse(companion.config["persistent"])
+
+    def test_missing_species_clears_last_pack_without_scope_end_or_error_flood(self):
+        companion = selection_companion({"weasel": self.sudo})
+        peer = companion.cu_peer
+        with mock.patch("companion.emit") as emit, mock.patch("pet_protocol.subprocess.run") as decoder:
+            companion.input_message(configure(preferredSpecies="dog"))
+            companion.input_message(configure(preferredSpecies="dog"))
+            companion.input_message(projection(1))
+            companion.input_message(projection(2))
+        emit.assert_called_once_with("error", code="builtin_pet_unavailable")
+        decoder.assert_not_called()
+        self.assertIsNone(companion.pack)
+        self.assertEqual(companion.character, {"source": "unavailable", "requestedSpecies": "dog", "species": None, "name": None})
+        self.assertEqual(companion.commands()[-1], "v1 asset none")
+        self.assertIs(companion.cu_peer, peer)
+        self.assertTrue(companion.feed_open)
+        self.assertTrue(companion.live_task)
+        self.assertFalse(companion.stop)
+        companion.close_renderer.assert_not_called()
+        with mock.patch("companion.emit") as emit:
+            companion.input_message(configure(preferredSpecies="weasel"))
+            companion.input_message(configure(preferredSpecies="dog"))
+        emit.assert_called_once_with("error", code="builtin_pet_unavailable")
+
+    def test_missing_default_is_unavailable_and_different_missing_choice_reports_once(self):
+        companion = selection_companion({})
+        self.assertEqual(companion.character, {"source": "unavailable", "requestedSpecies": None, "species": None, "name": None})
+        with mock.patch("companion.emit") as emit:
+            companion.report_selection_error()
+            companion.input_message(configure())
+            companion.input_message(configure(preferredSpecies="weasel"))
+            self.assertEqual(emit.call_count, 1)
+            companion.input_message(configure(preferredSpecies="cat"))
+            self.assertEqual(emit.call_count, 2)
+
+    def test_custom_precedes_missing_species_and_reset_obeys_preference(self):
+        companion = selection_companion({"weasel": self.sudo})
+        with tempfile.TemporaryDirectory(prefix="pet-custom-") as directory:
+            root = write_pack(Path(directory), "Mein Otter")
+            with mock.patch("pet_protocol.subprocess.run", return_value=mock.Mock(returncode=0)), mock.patch("companion.emit") as emit:
+                companion.input_message(configure(petPath=str(root), preferredSpecies="otter"))
+                self.assertEqual(companion.character, {"source": "custom", "requestedSpecies": "otter", "species": None, "name": "Mein Otter"})
+                self.assertEqual(companion.pack["sheet"], str(root / "pet.png"))
+                self.assertEqual(companion.commands()[-1], "v1 asset " + base64.b64encode(str(root / "pet.png").encode()).decode() + " 64 64")
+                emit.assert_not_called()
+                companion.input_message(configure(preferredSpecies="otter"))
+                self.assertIsNone(companion.pack)
+                self.assertEqual(companion.character["source"], "unavailable")
+                emit.assert_called_once_with("error", code="builtin_pet_unavailable")
+                companion.input_message(configure(preferredSpecies=None))
+                self.assertEqual(companion.pack, self.sudo)
+                self.assertEqual(companion.character, {"source": "builtin", "requestedSpecies": None, "species": "weasel", "name": "sudo"})
+
+    def test_invalid_custom_decode_does_not_adopt_config_or_pack(self):
+        companion = selection_companion({"weasel": self.sudo})
+        original_config, original_character = companion.config, companion.character
+        with tempfile.TemporaryDirectory(prefix="pet-invalid-custom-") as directory:
+            root = write_pack(Path(directory))
+            with mock.patch("pet_protocol.subprocess.run", return_value=mock.Mock(returncode=5)), self.assertRaises(ProtocolError):
+                companion.input_message(configure(petPath=str(root), preferredSpecies="dog"))
+        self.assertIs(companion.config, original_config)
+        self.assertIs(companion.character, original_character)
+        self.assertIs(companion.pack, self.sudo)
+        companion.close_renderer.assert_not_called()
+        companion.project.assert_not_called()
+
+    def test_character_state_is_output_only_and_unchanged_ticks_do_not_decode(self):
+        companion = selection_companion({"weasel": self.sudo})
+        companion.last_focus = companion.last_actor = companion.last_heartbeat = 10.0
+        companion.renderer_ready = False
+        companion.monitor = None
+        companion.cu_state = {"sessionId": "confirmed-session", "epoch": 1}
+        companion.last_state = None
+        companion.update_renderer = mock.Mock()
+        with mock.patch("companion.time.monotonic", return_value=10.0), mock.patch("companion.emit") as emit, mock.patch("pet_protocol.subprocess.run") as decoder:
+            companion.tick()
+            companion.tick()
+        decoder.assert_not_called()
+        emit.assert_called_once_with("state", visible=True, persistent=False, monitor=None,
+                                     computerUse=companion.cu_state, character=companion.character)
+
+
+class RealPackDecoderTests(unittest.TestCase):
+    def test_packaged_sudo_is_the_only_advertised_builtin(self):
+        root = os.environ.get("WEASEL_PET_BUILTIN_ROOT")
+        if root is None:
+            self.skipTest("packaged builtin root required")
+        renderer = os.environ["WEASEL_PET_RENDERER"]
+        packs = load_builtin_packs(renderer)
+        self.assertEqual(set(packs), {"weasel"})
+        self.assertEqual(packs["weasel"]["name"], "sudo")
+        self.assertEqual(packs["weasel"]["frameWidth"], 256)
+        self.assertEqual(packs["weasel"]["frameHeight"], 256)
+
+    def test_real_decoder_rejects_header_only_pack_for_catalog_and_custom_selection(self):
+        renderer = os.environ.get("WEASEL_PET_RENDERER", str(Path(__file__).resolve().with_name("weasel-desktop-pet-renderer")))
+        if not os.access(renderer, os.X_OK):
+            self.skipTest("built native renderer required for actual PNG decoding")
+        with tempfile.TemporaryDirectory(prefix="pet-real-decode-") as directory:
+            root = Path(directory)
+            pack_path = write_pack(root / "sudo")
+            self.assertEqual(decode_pack(pack_path, renderer)["name"], "sudo")
+            (pack_path / "pet.png").write_bytes(png()[:33])
+            # Valid dimensions alone must not advertise or select corrupt PNGs.
+            self.assertEqual(validate_pack(pack_path)["frameWidth"], 64)
+            with self.assertRaises(ProtocolError):
+                decode_pack(pack_path, renderer)
+            with mock.patch.dict(os.environ, {"WEASEL_PET_BUILTIN_ROOT": directory}):
+                self.assertEqual(load_builtin_packs(renderer), {})
+            companion = selection_companion({})
+            companion.renderer_path = renderer
+            with self.assertRaises(ProtocolError):
+                companion.input_message(configure(petPath=str(pack_path)))
+            self.assertIsNone(companion.pack)
+            self.assertEqual(companion.character["source"], "unavailable")
 
 
 if __name__ == "__main__":

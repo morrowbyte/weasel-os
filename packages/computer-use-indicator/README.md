@@ -36,7 +36,7 @@ monitor-loss, Actor lifecycle and paint-acknowledgement guards remain in force.
 
 The visual states distinguish permission from acquisition: covered eyes mean
 confirmed observation disabled; reading eyes indicate acquisition preparation or
-an actual read; unconfirmed policy has a separate closed-eye/question pose. No
+an actual read; unconfirmed policy also covers both eyes, with a question badge. No
 privacy claim is inferred from Crew arguments or old chat results. A custom pack
 cannot replace the renderer-controlled disabled/unknown gesture. The body does
 not use privacy status text; accessible names describe each state. Alt + Esc
@@ -55,7 +55,10 @@ Reduced motion settles immediately. There is no permanent idle GPU animation.
 
 Crew spawns `weasel-desktop-pet --stdio` without a shell. Each line is at most
 16 KiB. `configure` accepts `persistent`, `visible`, `reducedMotion` and a local
-`petPath` or null. `projection` accepts an increasing integer `revision`, a bounded
+`petPath` or null. Optional `preferredSpecies` is null or one of the twelve fixed
+IDs: weasel, dog, cat, fox, otter, raccoon, owl, raven, red-panda, capybara, bear,
+turtle. It is sent only after a peer advertises `ready.capabilities.builtinPets`.
+`projection` accepts an increasing integer `revision`, a bounded
 `workingCount` and at most 20 items with opaque `id`, `kind` (approval, question,
 result) and an explicitly safe public `summary` of at most 240 characters. No
 Actor authority fields are accepted on stdin. `toggle` changes persistent
@@ -70,10 +73,23 @@ open returns its opaque ID to Crew's existing thread/approval flow. Nothing is
 automatically approved. Approvals precede questions, then results. Stale revisions,
 duplicate IDs, unknown fields and unsupported actions are rejected.
 
+New peers advertise at most twelve unique `{species,name}` entries in
+`builtinPets`, validated and decoded once at startup. They always include
+`state.character={source,requestedSpecies,species,name}`. `builtin` identifies
+the actual species/name, `custom` has species=null and the manifest name, and
+`unavailable` has species/name=null. Only weasel/sudo is currently supplied.
+Null preference uses sudo; an explicit missing species never falls back to a
+weasel or previous choice. `builtin_pet_unavailable` is recoverable and deduped,
+not a CU/Companion termination. A validated custom `petPath` wins; resetting it
+uses the preference again. Pack availability is a startup snapshot. These new
+output fields require the paired Crew decoder; old strict peers are not claimed
+compatible. Species selection never comes from background inbox items.
+
 ## Custom artwork
 
-The bundled original generated weasel Lumi has eight four-frame strips. The
-asset compiler normalizes its original atlas into the integer-cell pack ABI.
+The built-in weasel is sudo, with eight four-frame strips. Lumi remains a prior
+reference asset. The asset compiler preserves six original sudo rows and mounts
+only the two approved question/answer corrections into the integer-cell pack ABI.
 Importable packs contain `pet.json` and `pet.png`, with no URLs, scripts or SVG.
 Frames are 64–512 px, a 4 by 8 grid, RGBA 8-bit PNG up to 16 MiB; metadata is at
 most 16 KiB. Rows are idle, working, reading, lookingAway, waiting, attention,
@@ -83,6 +99,16 @@ oversized dimensions are rejected, and the renderer decodes PNG before use.
 Crew copies imports privately and can return to the default pack. Its generation
 entry opens the normal Agent draft; actual image-tool/provider availability and
 successful artwork generation are distinct from opening that draft.
+
+Motion follows bounded semantic events: a working-count increase or a new Actor
+work interval, a new item ID/kind, or entry into confirmed reading/protection.
+Approval waits with open paws, a question raises one paw beside the head, and a
+new completed answer offers its result without celebrating task success. Frame 3
+is the held state; reduced motion shows it immediately. Twenty recent item cues
+are remembered. Unchanged projections and return from reading resume the held
+item without another wave; a changed summary alone is not a new result. Dismiss
+withdraws the reminder and never changes the underlying request. Engine waiting
+and queue counts alone do not manufacture an approval gesture.
 
 Live evidence must cover the actual native overlay and Electron integration.
 Compilation, unit fixtures and `ready` are separate from visible poses, input

@@ -17,7 +17,8 @@ import time
 
 from indicator import (CapabilityError, desktop_lifecycle, graphical_environment,
                        observation_generation, observation_state, process_start_ticks, runtime_dir, task_paths)
-from pet_protocol import MAX_LINE, TOKEN, Projection, ProtocolError, read_regular, validate_message, validate_pack
+from pet_protocol import (MAX_LINE, TOKEN, Projection, ProtocolError, decode_pack, load_builtin_packs,
+                          read_regular, validate_builtin_pets, validate_message)
 
 
 def emit(kind, **fields):
@@ -77,8 +78,11 @@ class Companion:
         self.renderer_ready = False
         self.renderer_failed = False
         self.renderer_pending = bytearray()
-        self.config = {"persistent": False, "visible": True, "reducedMotion": False, "petPath": None}
-        self.pack = None
+        self.config = {"persistent": False, "visible": True, "reducedMotion": False, "petPath": None,
+                       "preferredSpecies": None}
+        self.builtin_packs = load_builtin_packs(self.renderer_path)
+        self.pack, self.character = self.select_character(self.config)
+        self.last_unavailable_species = None
         self.projection = Projection()
         self.peers = {}
         self.cu_peer = None
@@ -94,6 +98,26 @@ class Companion:
         self.socket_inode = None
         self.lock = None
         self.server = None
+
+    def select_character(self, config):
+        requested = config["preferredSpecies"]
+        if config["petPath"] is not None:
+            pack = decode_pack(config["petPath"], self.renderer_path)
+            return pack, {"source": "custom", "requestedSpecies": requested, "species": None, "name": pack["name"]}
+        identity = requested if requested is not None else "weasel"
+        pack = self.builtin_packs.get(identity)
+        if pack is not None:
+            return pack, {"source": "builtin", "requestedSpecies": requested, "species": identity, "name": pack["name"]}
+        return None, {"source": "unavailable", "requestedSpecies": requested, "species": None, "name": None}
+
+    def report_selection_error(self):
+        if self.character["source"] == "unavailable":
+            identity = self.character["requestedSpecies"] or "weasel"
+            if identity != self.last_unavailable_species:
+                self.last_unavailable_species = identity
+                emit("error", code="builtin_pet_unavailable")
+        else:
+            self.last_unavailable_species = None
 
     def command(self, line):
         if self.renderer and self.renderer.poll() is None:
@@ -137,7 +161,7 @@ class Companion:
         if self.pack:
             commands.append(f"v1 asset {encoded(self.pack['sheet'])} {self.pack['frameWidth']} {self.pack['frameHeight']}")
         else:
-            commands.append("v1 asset default")
+            commands.append("v1 asset none")
         return commands
 
     def project(self, force=False):
@@ -234,17 +258,16 @@ class Companion:
         kind = message["type"]
         if kind == "configure":
             # Validate before changing any configuration or renderer.
-            pack = validate_pack(message["petPath"]) if message["petPath"] else None
-            if pack:
-                decoded = subprocess.run([self.renderer_path, "--validate-sheet", pack["sheet"], str(pack["frameWidth"]), str(pack["frameHeight"])],
-                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2, check=False)
-                if decoded.returncode != 0:
-                    raise ProtocolError("invalid_pet_png")
+            config = {key: message[key] for key in ("persistent", "visible", "reducedMotion", "petPath")}
+            config["preferredSpecies"] = message.get("preferredSpecies")
+            pack, character = self.select_character(config)
             if self.config["petPath"] != message["petPath"]:
                 self.close_renderer()
-            self.config = {key: message[key] for key in self.config}
+            self.config = config
             self.pack = pack
+            self.character = character
             self.renderer_failed = False
+            self.report_selection_error()
             self.project(force=True)
         elif kind == "projection":
             if self.projection.apply(message):
@@ -331,7 +354,8 @@ class Companion:
             self.last_heartbeat = now
             self.command("v1 heartbeat")
         state = {"visible": bool(self.cu_peer or self.renderer_ready), "persistent": self.config["persistent"],
-                 "monitor": self.monitor[0] if self.monitor else None, "computerUse": self.cu_state}
+                 "monitor": self.monitor[0] if self.monitor else None, "computerUse": self.cu_state,
+                 "character": self.character}
         if state != self.last_state:
             emit("state", **state)
             self.last_state = state
@@ -355,7 +379,11 @@ class Companion:
         self.selector.register(sys.stdin, selectors.EVENT_READ, "stdin")
         for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
             signal.signal(signum, lambda *_: setattr(self, "stop", True))
-        emit("ready", capabilities={"nativeOverlay": True, "focusMonitor": True, "customPet": True, "computerUse": True})
+        builtin_pets = validate_builtin_pets([
+            {"species": identity, "name": pack["name"]} for identity, pack in self.builtin_packs.items()])
+        emit("ready", capabilities={"nativeOverlay": True, "focusMonitor": True, "customPet": True,
+                                    "computerUse": True, "builtinPets": builtin_pets})
+        self.report_selection_error()
         try:
             while not self.stop:
                 for key, _ in self.selector.select(0.1):

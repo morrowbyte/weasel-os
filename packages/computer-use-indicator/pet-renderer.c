@@ -21,6 +21,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "monitor-match.h"
+#include "pet-motion.h"
 
 #define LEASE_US (4 * G_USEC_PER_SEC)
 #define MAX_LINE (16384u - 1u) /* Include the terminating newline in the 16 KiB cap. */
@@ -32,15 +33,6 @@
 #define FRAME_INTERVAL_MS 167
 #define PI 3.14159265358979323846
 
-typedef enum {
-    POSE_IDLE, POSE_WORKING, POSE_READING, POSE_PRIVATE,
-    POSE_WAITING, POSE_ATTENTION, POSE_SUCCESS, POSE_UNKNOWN
-} PetPose;
-typedef enum { PHASE_UNKNOWN, PHASE_ACTIVE, PHASE_OBSERVING,
-               PHASE_WAITING, PHASE_QUEUED } Phase;
-typedef enum { OBS_UNKNOWN, OBS_ENABLED, OBS_DISABLED } Observation;
-typedef enum { BUBBLE_NONE, BUBBLE_APPROVAL, BUBBLE_QUESTION, BUBBLE_RESULT } BubbleKind;
-
 static GtkWidget *body, *drawing, *bubble, *summary_label, *kind_icon;
 static GtkWidget *open_button, *dismiss_button;
 static GtkCssProvider *css;
@@ -50,6 +42,7 @@ static GdkPixbuf *sheet;
 static char *sheet_path;
 static struct stat sheet_info;
 static guint64 asset_serial;
+static gboolean character_available = TRUE;
 static int frame_width, frame_height;
 static char *output_name, *task_id, *activity;
 static char *bubble_id, *bubble_summary;
@@ -57,6 +50,7 @@ static BubbleKind bubble_kind;
 static Phase phase = PHASE_UNKNOWN;
 static Observation observation = OBS_UNKNOWN;
 static PetPose pose = POSE_UNKNOWN;
+static PetMotionState motion_state;
 static gboolean observation_active, begun, awaiting_begin, stopped, cu_seen;
 static gboolean visible = TRUE, reduced_motion, target_valid;
 static gboolean ready_sent, action_sent, output_failed;
@@ -209,6 +203,7 @@ static void emit_ready(void) {
 
 static void stop_animation(void) {
     if (animation_source) { g_source_remove(animation_source); animation_source = 0; }
+    frame = 3;
 }
 
 static void finish(const char *reason) {
@@ -225,14 +220,17 @@ static void finish(const char *reason) {
     if (gtk_main_level()) gtk_main_quit();
 }
 
+static PetMotionInput motion_input(void) {
+    return (PetMotionInput) {
+        .observation = observation, .observation_active = observation_active,
+        .phase = phase, .kind = bubble_kind, .item_id = bubble_id,
+        .working_count = working_count, .reduced_motion = reduced_motion
+    };
+}
+
 static PetPose current_pose(void) {
-    if (observation == OBS_DISABLED) return POSE_PRIVATE;
-    if (observation == OBS_UNKNOWN) return POSE_UNKNOWN;
-    if (observation_active || phase == PHASE_OBSERVING) return POSE_READING;
-    if (queue_count || bubble_kind != BUBBLE_NONE || phase == PHASE_QUEUED) return POSE_ATTENTION;
-    if (phase == PHASE_ACTIVE || working_count) return POSE_WORKING;
-    if (phase == PHASE_WAITING) return POSE_WAITING;
-    return POSE_IDLE;
+    PetMotionInput input = motion_input();
+    return pet_pose_for(&input);
 }
 
 static gboolean can_present(void) {
@@ -245,16 +243,18 @@ static gboolean cu_in_progress(void) {
 
 static void accessible_state(void) {
     const char *privacy = observation == OBS_DISABLED ? "Bildschirmzugriff ausgeschaltet. Pfoten vor den Augen." :
-        observation == OBS_UNKNOWN ? "Bildschirmzugriff unbestätigt. Augen geschlossen." :
+        observation == OBS_UNKNOWN ? "Bildschirmzugriff unbestätigt. Pfoten vor den Augen." :
         (observation_active || phase == PHASE_OBSERVING) ? "Liest den Bildschirm." :
         "Bildschirmzugriff erlaubt, liest gerade nicht.";
-    const char *status = pose == POSE_WORKING ? "Arbeitet." : pose == POSE_WAITING ? "Wartet." :
-        pose == POSE_ATTENTION ? "Nachricht wartet." : "";
+    const char *status = pose == POSE_WORKING ? "Arbeitet." : pose == POSE_WAITING ? "Freigabe erforderlich." :
+        pose == POSE_ATTENTION ? "Frage wartet." : pose == POSE_SUCCESS ? "Antwort liegt vor." : "";
     char *description = g_strdup_printf("%s %s %u Aufgaben, %u Nachrichten. %s%s",
         privacy, status, working_count, queue_count, activity ? activity : "",
         cu_seen && !awaiting_begin ? " Computer Use stoppen: Alt + Escape." : "");
     AtkObject *object = gtk_widget_get_accessible(drawing);
-    atk_object_set_name(object, "Wiesel");
+    /* The renderer receives pixels, not a species identity. Do not announce a
+     * missing dog/custom character as a weasel through accessibility either. */
+    atk_object_set_name(object, character_available ? "Desktop-Pet" : "Desktop-Pet: Tier nicht verfügbar");
     atk_object_set_role(object, ATK_ROLE_IMAGE);
     atk_object_set_description(object, description);
     g_free(description);
@@ -305,6 +305,29 @@ static void locked_eye(cairo_t *cr) {
 /* The custom character has a long tail, cream muzzle, rust coat and teal
  * neckerchief. All poses are procedural, independent of any system emoji.
  * Privacy frame zero already has an opaque eye mask AND covering paws. */
+static void native_eye_paws(cairo_t *cr, unsigned animation_frame) {
+    /* Opaque from frame zero, independent of any custom face coordinates. */
+    cairo_set_source_rgb(cr, 0.11, 0.16, 0.18);
+    round_rect(cr, 43, 34, 65, 28, 12); cairo_fill(cr);
+    static const double settle[] = { 0, -1, 0.6, 0 };
+    double paw_y = settle[animation_frame];
+    fill_ellipse(cr, 58, 50 + paw_y, 12, 16, 0.64, 0.29, 0.16);
+    fill_ellipse(cr, 93, 50 + paw_y, 12, 16, 0.64, 0.29, 0.16);
+    fill_ellipse(cr, 58, 53 + paw_y, 7, 9, 0.91, 0.65, 0.45);
+    fill_ellipse(cr, 93, 53 + paw_y, 7, 9, 0.91, 0.65, 0.45);
+    cairo_set_source_rgb(cr, 0.43, 0.22, 0.14); cairo_set_line_width(cr, 1.3);
+    for (int finger = 0; finger < 3; ++finger) {
+        cairo_move_to(cr, 53 + finger * 4, 40 + paw_y); cairo_line_to(cr, 53 + finger * 4, 45 + paw_y);
+        cairo_move_to(cr, 88 + finger * 4, 40 + paw_y); cairo_line_to(cr, 88 + finger * 4, 45 + paw_y);
+    }
+    cairo_stroke(cr);
+}
+
+static void native_unknown_badge(cairo_t *cr) {
+    fill_ellipse(cr, 119, 24, 13, 13, 0.17, 0.21, 0.27);
+    cairo_set_source_rgb(cr, 0.96, 0.88, 0.68); small_text(cr, "?", 119, 24, 19);
+}
+
 static void native_pet(cairo_t *cr, PetPose state, unsigned animation_frame) {
     static const double bob[] = { 0, -1.4, -0.4, 0 };
     double offset = state == POSE_WORKING || state == POSE_READING || state == POSE_ATTENTION ?
@@ -360,33 +383,17 @@ static void native_pet(cairo_t *cr, PetPose state, unsigned animation_frame) {
     cairo_line_to(cr, 97, 89); cairo_curve_to(cr, 82, 96, 65, 94, 54, 88); cairo_close_path(cr); cairo_fill(cr);
     cairo_move_to(cr, 86, 89); cairo_line_to(cr, 97, 91); cairo_line_to(cr, 90, 108);
     cairo_line_to(cr, 82, 102); cairo_close_path(cr); cairo_fill(cr);
-    if (state == POSE_PRIVATE) {
+    if (pet_native_eye_cover(state)) {
         /* No sprite pixels are painted for this state. This covers both eyes
          * before the first ACK even if custom artwork puts its face elsewhere. */
-        cairo_set_source_rgb(cr, 0.11, 0.16, 0.18);
-        round_rect(cr, 43, 34, 65, 28, 12); cairo_fill(cr);
-        static const double settle[] = { 0, -1, 0.6, 0 };
-        double paw_y = settle[animation_frame];
-        fill_ellipse(cr, 58, 50 + paw_y, 12, 16, 0.64, 0.29, 0.16);
-        fill_ellipse(cr, 93, 50 + paw_y, 12, 16, 0.64, 0.29, 0.16);
-        fill_ellipse(cr, 58, 53 + paw_y, 7, 9, 0.91, 0.65, 0.45);
-        fill_ellipse(cr, 93, 53 + paw_y, 7, 9, 0.91, 0.65, 0.45);
-        cairo_set_source_rgb(cr, 0.43, 0.22, 0.14); cairo_set_line_width(cr, 1.3);
-        for (int finger = 0; finger < 3; ++finger) {
-            cairo_move_to(cr, 53 + finger * 4, 40 + paw_y); cairo_line_to(cr, 53 + finger * 4, 45 + paw_y);
-            cairo_move_to(cr, 88 + finger * 4, 40 + paw_y); cairo_line_to(cr, 88 + finger * 4, 45 + paw_y);
-        }
-        cairo_stroke(cr);
+        native_eye_paws(cr, animation_frame);
     } else {
         fill_ellipse(cr, 49, 105, 7, 15, 0.65, 0.29, 0.16);
         fill_ellipse(cr, 102, 105, 7, 15, 0.65, 0.29, 0.16);
     }
     cairo_restore(cr);
     if (state == POSE_PRIVATE) locked_eye(cr);
-    if (state == POSE_UNKNOWN) {
-        fill_ellipse(cr, 119, 24, 13, 13, 0.17, 0.21, 0.27);
-        cairo_set_source_rgb(cr, 0.96, 0.88, 0.68); small_text(cr, "?", 119, 24, 19);
-    }
+    if (state == POSE_UNKNOWN) native_unknown_badge(cr);
 }
 
 static void thought_dots(cairo_t *cr) {
@@ -476,7 +483,14 @@ static gboolean pet_draw(GtkWidget *widget, cairo_t *cr, gpointer unused) {
     double scale = scale_x < scale_y ? scale_x : scale_y;
     cairo_translate(cr, (width - PET_SIZE * scale) / 2, (height - BODY_HEIGHT * scale) / 2);
     cairo_scale(cr, scale, scale);
-    if (sheet && pose != POSE_PRIVATE && pose != POSE_UNKNOWN) {
+    if (!character_available) {
+        /* No substitute species. Keep native protection and controls visible. */
+        if (pet_native_eye_cover(pose)) {
+            native_eye_paws(cr, frame);
+            if (pose == POSE_PRIVATE) locked_eye(cr);
+            else native_unknown_badge(cr);
+        }
+    } else if (sheet && !pet_native_eye_cover(pose)) {
         GdkPixbuf *sprite = gdk_pixbuf_new_subpixbuf(sheet, (int)frame * frame_width,
             (int)pose * frame_height, frame_width, frame_height);
         double sx = PET_SIZE / (double)frame_width, sy = PET_SIZE / (double)frame_height;
@@ -544,12 +558,11 @@ static gboolean animate_frame(gpointer unused) {
     return G_SOURCE_CONTINUE;
 }
 
-static void start_animation(void) {
+static void start_animation(gboolean play) {
     stop_animation();
     animation_step = 0;
-    frame = reduced_motion && pose == POSE_PRIVATE ? 3 : 0;
-    animation_length = pose == POSE_WORKING || pose == POSE_READING ||
-        pose == POSE_ATTENTION || pose == POSE_PRIVATE ? 4 : 1;
+    frame = !play || reduced_motion ? 3 : 0;
+    animation_length = play && !reduced_motion ? 4 : 1;
     if (!reduced_motion && can_present() && animation_length > 1)
         animation_source = g_timeout_add(FRAME_INTERVAL_MS, animate_frame, NULL);
 }
@@ -576,10 +589,14 @@ static void sync_visibility(void) {
 }
 
 static void refresh_presentation(gboolean animate) {
-    PetPose next = current_pose();
-    gboolean changed_pose = pose != next;
-    pose = next;
-    if (animate || changed_pose) start_animation();
+    /* Repaint requests are not semantic events. The bounded cue engine alone
+     * decides whether a new work/item/observation gesture should play. */
+    (void)animate;
+    PetMotionInput input = motion_input();
+    input.presentable = can_present();
+    PetMotionDecision decision = pet_motion_update(&motion_state, &input);
+    pose = decision.pose;
+    if (decision.play || decision.settle) start_animation(decision.play);
     ++render_serial;
     accessible_state();
     sync_visibility();
@@ -1001,7 +1018,7 @@ static void process_line(const char *line) {
             !safe_text(text, MAX_SUMMARY_BYTES, MAX_SUMMARY_CHARS)) {
             g_free(text); finish("invalid_bubble"); goto done;
         }
-        gboolean same = bubble_id && !strcmp(bubble_id, words[3]);
+        gboolean same = bubble_id && !strcmp(bubble_id, words[3]) && bubble_kind == kind;
         g_free(bubble_id); g_free(bubble_summary);
         bubble_id = g_strdup(words[3]); bubble_summary = text; bubble_kind = kind;
         if (!same) action_sent = FALSE;
@@ -1026,13 +1043,21 @@ static void process_line(const char *line) {
         /* Binding readiness is transport/surface readiness, never a privacy
          * ACK. The next begin opens phase processing for the new identity. */
         emit_ready();
+    } else if (count == 3 && !strcmp(words[1], "asset") && !strcmp(words[2], "none")) {
+        if (character_available || sheet) {
+            character_available = FALSE;
+            g_clear_object(&sheet); g_clear_pointer(&sheet_path, g_free);
+            ++asset_serial;
+            refresh_presentation(FALSE);
+        }
     } else if (count == 3 && !strcmp(words[1], "asset") && !strcmp(words[2], "default")) {
         guint64 previous_asset = asset_serial;
         const char *path = g_getenv("WEASEL_PET_SHEET");
         if (path && *path) {
             if (!load_default_sheet(path)) { finish("invalid_asset"); goto done; }
         } else if (sheet) { g_clear_object(&sheet); g_clear_pointer(&sheet_path, g_free); ++asset_serial; }
-        if (asset_serial != previous_asset) refresh_presentation(TRUE);
+        if (!character_available) { character_available = TRUE; ++asset_serial; }
+        if (asset_serial != previous_asset) refresh_presentation(FALSE);
     } else if (count == 5 && !strcmp(words[1], "asset")) {
         guint64 previous_asset = asset_serial;
         guint64 fw, fh;
@@ -1041,7 +1066,8 @@ static void process_line(const char *line) {
             unsigned_number(words[4], 512, &fh) && fh >= 64 && load_sheet(path, (int)fw, (int)fh);
         g_free(path);
         if (!valid) { finish("invalid_asset"); goto done; }
-        if (asset_serial != previous_asset) refresh_presentation(TRUE);
+        if (!character_available) { character_available = TRUE; ++asset_serial; }
+        if (asset_serial != previous_asset) refresh_presentation(FALSE);
     } else finish("invalid_protocol");
 done:
     g_strfreev(words);
