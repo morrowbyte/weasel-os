@@ -9,7 +9,7 @@
     };
     nixpkgs-unstable.url = "github:nixos/nixpkgs/nixos-unstable";
     serena = {
-      url = "github:oraios/serena/5e4f5cd173c7ff3eed37ee3f1de6c266b937c5dc";
+      url = "github:oraios/serena/6e5c3776d4e67befaab7c290bc29b0279c98d1ed";
       inputs.nixpkgs.follows = "nixpkgs-unstable";
     };
     nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";

@@ -1652,3 +1652,12 @@ Der erste echte Lauf zeigte wiederholt neu gestartete Online-Kopien der aktiven 
 ## 2026-11-12 — sudo: Tierwahl und ereignisgebundene Gesten
 
 Ein fester, beim Start wirklich decodierter Built-in-Katalog meldet zunächst nur weasel/sudo. Eine explizit fehlende Tierpräferenz bleibt unavailable; eigene Imports haben Vorrang. Der optionale Crew-Kanal erhält dadurch keine Beobachtungs-/Taskautorität. Disabled und unknown ersetzen alle Assetpixel durch native vollständige Augenabdeckung und beide Pfoten. Begrenzte Item-ID/Kind-Historie, Arbeitsanstieg und echte Phasen unterscheiden neue Gesten von unveränderten Projektionen und Rückkehr nach Reading; die vier Frames halten anschließend ihre letzte Pose, auch bei Reduced Motion. Zwei freigegebene Ersatzreihen werden zellweise mit registrierter Fußlinie aus dem separaten Strip montiert, sechs Reihen bleiben aus dem Original; Alpha-Rauschen vor premultiplizierter Interpolation entfernen. Boat-Nixpaketcheck: strikter C-Build, Ereignis-/Montageregression, 15 Präsentationsfälle, 26 Pythonfälle mit echtem PNG-Decoder und drei betroffene Reconnect-/Fokusfälle bestanden. Statische 144px-Matten auf hell/dunkel sind gesehen; tatsächlicher Playerablauf in Nutzerthreads und elf weitere Tierpacks bleiben eigene offene Nachweise. Keine Laptopchecks, GUI oder Aktivierung in diesem Slice.
+
+### 2026-11-12 — batch candidate 20261112T110357Z-30ec536a
+
+- Updated existing configured sources: flake.lock, flake.nix, packages/t3code/source.json.
+- Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
+
+### 2026-11-12 — Desktop-Pet auf den verifizierten Main-Batch setzen
+
+Nur der parallel ergänzte Lernlog kollidierte mit Main42a43c3; alle Einträge beider Seiten sind erhalten. Native-/CU-/Niri- und Workflow-Dateien bleiben bytegleich zu99fb995. Der geerbte Updatebatch bleibt unverändert. Auf der bestehenden Boat bestanden `nixfmt --check flake.nix` und beide Host-drvPath-Evaluationen mit `--no-write-lock-file`; der tatsächlich gewählte Indicator-DRV und sein Output sind identisch zum bereits qualifizierten sudo-Paket. Bestehende Paket-/Runtimebelege deshalb wiederverwenden, neue normale CI separat verfolgen. Keine lokale Prüfung, Paket-/Hostbuildrunde oder GUI.
