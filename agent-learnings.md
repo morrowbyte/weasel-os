@@ -1601,3 +1601,8 @@ Tägliche doppelte Repository-Checks durch genaue Snapshot-ID-Rücklese ersetzt;
 ## 2026-11-11 — Crew-SQLite bei laufenden Schreibzugriffen sichern
 
 Der erste echte Lauf zeigte wiederholt neu gestartete Online-Kopien der aktiven Crew-Datenbank (55 GB logische Schreibzugriffe bei erst 1,3 GB Kopiefortschritt). Ein expliziter Lesesnapshot vor den Backup-Schritten verhindert diese Neustarts; beide aktiven Profile verwenden WAL und bleiben beschreibbar. Der begrenzte Regressionstest schreibt zwischen realen SQLite-Backup-Schritten über eine zweite Verbindung: vor dem Fix reproduzierbar rot, danach alle sieben Cloud-Backup-Tests grün. Unveröffentlichte Zwischenkopien bleiben bei Abbruch ausgeschlossen und werden beim nächsten Lauf aufgeräumt.
+
+### 2026-11-12 — batch candidate 20261112T110357Z-30ec536a
+
+- Updated existing configured sources: flake.lock, flake.nix, packages/t3code/source.json.
+- Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
