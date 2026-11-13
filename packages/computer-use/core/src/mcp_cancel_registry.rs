@@ -43,7 +43,7 @@ impl RequestKind {
                 // Resume changes input permission, so it needs the same scoped
                 // cancellation ownership as input. It must remain outside the
                 // degraded priority reserve, including the internal wire name.
-                Some("desktop_act" | "desktop_resume" | "desktop_resume_bound") => Self::Act,
+                Some("desktop_act" | "desktop_resume" | "desktop_resume_bound" | "desktop_set_observation_mode") => Self::Act,
                 Some(
                     "desktop_status"
                     | "desktop_cancel"

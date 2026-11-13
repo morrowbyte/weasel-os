@@ -4,6 +4,9 @@ mod input_policy;
 mod launch;
 mod mcp_cancel_registry;
 mod mcp_response;
+mod observation_policy;
+#[cfg(test)]
+mod privacy_tests;
 mod release_recovery;
 mod takeover;
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -18,7 +21,7 @@ use std::{
     env, fs,
     io::{self, BufRead, BufReader, Read, Write},
     os::{
-        fd::AsRawFd,
+        fd::{AsRawFd, FromRawFd},
         unix::{
             fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt},
             net::{UnixListener, UnixStream},
@@ -42,6 +45,54 @@ const MAX_POINTER_VIEW_DIMENSION: u32 = 1200;
 const RESUME_BINDING_REVISION: u32 = 1;
 thread_local! {static CURRENT_CANCEL_FLAG: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };}
 thread_local! {static CURRENT_DEADLINE: RefCell<Option<Instant>> = const { RefCell::new(None) };}
+// Retain the daemon's policy read lease until this MCP worker has flushed its
+// response. A mode change cannot overtake an already-buffered proxy image/tree.
+thread_local! {static PROXY_DELIVERIES: RefCell<Option<Vec<UnixStream>>> = const { RefCell::new(None) };}
+
+struct ProxyDeliveryGuard;
+// An unbuffered descriptor avoids io::Stdout retaining old content after a
+// failed flush. A failure permanently disables this connection's output path.
+struct PublicOutput<W: Write> {
+    writer: W,
+    failed: bool,
+}
+impl<W: Write> PublicOutput<W> {
+    fn send(&mut self, value: &Value) -> R<()> {
+        if self.failed { return Err("Public output is closed after an earlier write failure".into()); }
+        let result = writeln!(self.writer, "{value}").and_then(|_| self.writer.flush());
+        if result.is_err() { self.failed = true; }
+        result.map_err(|_| "Public output failed; no later response will be emitted".into())
+    }
+}
+fn public_stdout() -> R<PublicOutput<fs::File>> {
+    let fd = unsafe { libc::fcntl(libc::STDOUT_FILENO, libc::F_DUPFD_CLOEXEC, 3) };
+    if fd < 0 { return Err("Cannot open unbuffered public output".into()); }
+    Ok(PublicOutput { writer: unsafe { fs::File::from_raw_fd(fd) }, failed: false })
+}
+fn release_proxy_deliveries() {
+    PROXY_DELIVERIES.with(|f| {
+        if let Some(deliveries) = f.borrow_mut().as_mut() {
+            for mut stream in deliveries.drain(..) { let _ = stream.write_all(b"delivered\n"); }
+        }
+    });
+}
+impl ProxyDeliveryGuard {
+    fn start() -> Self {
+        PROXY_DELIVERIES.with(|f| *f.borrow_mut() = Some(Vec::new()));
+        Self
+    }
+}
+impl Drop for ProxyDeliveryGuard {
+    fn drop(&mut self) {
+        if let Some(deliveries) = PROXY_DELIVERIES.with(|f| f.borrow_mut().take()) {
+            for mut stream in deliveries {
+                // Flush is complete (or failed): no cached response can escape
+                // this worker later. EOF also releases a disconnected proxy.
+                let _ = stream.write_all(b"delivered\n");
+            }
+        }
+    }
+}
 fn own_canceled() -> bool {
     CURRENT_CANCEL_FLAG.with(|f| {
         f.borrow()
@@ -74,6 +125,9 @@ fn remaining_timeout(max: Duration) -> Duration {
 #[derive(Clone)]
 struct Observation {
     id: String,
+    blind: bool,
+    blind_task: Option<String>,
+    observation_generation: u64,
     at: Instant,
     epoch: u64,
     input_generation: u64,
@@ -158,6 +212,8 @@ struct State {
     capture_available: AtomicBool,
     capture_attempts: AtomicU64,
     capture_failure: Mutex<Option<String>>,
+    observation_policy: observation_policy::Policy,
+    indicator_phase_gate: Mutex<()>,
     active: Mutex<Value>,
     // One explicit Computer Use task owns this scope across model-thinking gaps.
     // The task indicator registers it and removes it on every normal shutdown;
@@ -350,6 +406,227 @@ struct ActArgs {
     #[serde(default = "default_settle_ms")]
     settle_ms: u64,
 }
+
+// Deserialized directly from the pipe. Unknown fields, including titles and
+// workspace names, are skipped without retaining strings or raw JSON buffers.
+#[derive(Deserialize, Serialize)]
+struct StructuralWindow {
+    id: u64,
+    pid: Option<u64>,
+    app_id: Option<String>,
+    workspace_id: Option<u64>,
+    is_focused: bool,
+    is_floating: bool,
+    layout: Option<StructuralLayout>,
+}
+// Preserve every geometry field used by identity(), including the original
+// JSON number representation. Unknown future layout fields fail closed rather
+// than silently weakening the retained-observation comparison.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StructuralLayout {
+    #[serde(deserialize_with = "Option::deserialize")]
+    pos_in_scrolling_layout: Option<[serde_json::Number; 2]>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    tile_pos_in_workspace_view: Option<[serde_json::Number; 2]>,
+    tile_size: [serde_json::Number; 2],
+    window_offset_in_tile: [serde_json::Number; 2],
+    window_size: [serde_json::Number; 2],
+}
+#[derive(Deserialize, Serialize)]
+struct StructuralWorkspace {
+    id: u64,
+    output: Option<String>,
+    is_active: bool,
+    is_focused: bool,
+    active_window_id: Option<u64>,
+}
+
+fn privacy_fenced_tool(tool: &str) -> bool {
+    !matches!(tool, "desktop_set_observation_mode" | "desktop_indicator_lifecycle"
+        | "desktop_cancel" | "desktop_takeover")
+}
+
+fn observation_fields(state: &State, data: &mut Value) {
+    let snapshot = state.observation_policy.snapshot();
+    data["observation_mode"] = json!(snapshot.mode);
+    data["observation_active"] = json!(snapshot.active);
+    data["observation_generation"] = json!(snapshot.generation);
+}
+
+struct ObservationAcquisition<'a> {
+    acquisition: Option<observation_policy::Acquisition<'a>>,
+    state: &'a State,
+    phase: Option<(String, u64)>,
+}
+impl Drop for ObservationAcquisition<'_> {
+    fn drop(&mut self) {
+        let Ok(_phase) = self.state.indicator_phase_gate.lock() else {
+            self.acquisition.take();
+            return;
+        };
+        self.acquisition.take();
+        if let Some((task, epoch)) = &self.phase {
+            if let Ok(phase) = current_indicator_phase(self.state) {
+                let _ = indicator_phase_unlocked(self.state, task, *epoch, phase);
+            }
+        }
+    }
+}
+fn begin_acquisition(state: &State) -> R<ObservationAcquisition<'_>> {
+    state.observation_policy.require_enabled()?;
+    let epoch = state.epoch.load(Ordering::SeqCst);
+    let scope = state.task_scopes.lock().map_err(|_| "Task scopes poisoned")?
+        .iter().find(|(_, scope)| scope.epoch == epoch && scope.is_live() && scope.indicator_socket.is_some())
+        .map(|(id, _)| id.clone());
+    let mut guard = ObservationAcquisition {
+        acquisition: None, state, phase: scope.map(|task| (task, epoch)),
+    };
+    {
+        let _phase = state.indicator_phase_gate.lock().map_err(|_| "Indicator phase gate poisoned")?;
+        if let Some((task, _)) = &guard.phase {
+            // A failed paint barrier must also roll back the attempted phase.
+            indicator_phase_unlocked(state, task, epoch, "observing")?;
+        }
+        guard.acquisition = Some(state.observation_policy.acquiring()?);
+    }
+    Ok(guard)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObservationModeArgs {
+    mode: observation_policy::Mode,
+}
+
+fn set_observation_mode(state: &State, args: &Value) -> R<Value> {
+    let args: ObservationModeArgs = serde_json::from_value(args.clone())
+        .map_err(|e| format!("Invalid observation mode: {e}"))?;
+    // Never advance the input/Stop epoch: the indicator keeps its live task.
+    // The writer drains acquisitions AND their response delivery first.
+    let _write = loop {
+        if own_canceled() { return Err("Observation mode request canceled".into()); }
+        match state.observation_policy.gate.try_write() {
+            Ok(lock) => break lock,
+            Err(std::sync::TryLockError::WouldBlock) => thread::sleep(Duration::from_millis(5)),
+            Err(_) => return Err("Observation policy lock poisoned".into()),
+        }
+    };
+    let changed = state.observation_policy.mode() != args.mode;
+    if changed || args.mode == observation_policy::Mode::Disabled {
+        if changed { state.observation_policy.disable_and_invalidate(); }
+        state.observations.lock().map_err(|_| "Observation storage poisoned")?.clear();
+        state.reference_cache.invalidate();
+        state.semantic_targets.lock().map_err(|_| "Semantic storage poisoned")?.clear();
+        *state.last_result.lock().map_err(|_| "Last result state poisoned")? = Value::Null;
+        state.capture_available.store(false, Ordering::SeqCst);
+        // Also erase orphan captures from failed/canceled requests, not only
+        // images still referenced by the observation map. No symlink traversal.
+        for entry in fs::read_dir(&state.image_dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if (name.starts_with("obs-") || name.starts_with("guard-")) && name.ends_with(".png") {
+                if entry.file_type().map_err(|e| e.to_string())?.is_file() {
+                    fs::remove_file(entry.path()).map_err(|e| format!("Observation disabled; image purge failed: {e}"))?;
+                }
+            }
+        }
+        if args.mode == observation_policy::Mode::Enabled { state.observation_policy.enable(); }
+    }
+    let mut data = json!({"schema":1,"status":"observation_mode_set","changed":changed,
+        "session_id":state.session_id,"epoch":state.epoch.load(Ordering::SeqCst),
+        "cached_observations_invalidated":changed,"task_scope_preserved":true,
+        "note":"Enabled grants access; it does not mean content is being captured. Disabled drains previous response deliveries and blocks new content acquisition. Previously delivered content cannot be recalled."});
+    observation_fields(state, &mut data);
+    record(state, "observation_mode", json!({"mode":args.mode,"generation":state.observation_policy.generation()}));
+    Ok(text_result(data))
+}
+
+fn preflight_blind_batch(parsed: &ActArgs) -> R<()> {
+    if parsed.observe_after || parsed.include_image {
+        return Err("Observation disabled: blind actions require explicit observe_after=false and include_image=false".into());
+    }
+    if parsed.actions.is_empty() || parsed.actions.len() > 4
+        || parsed.timeout_ms.is_some_and(|ms| !(100..=8000).contains(&ms)) {
+        return Err("Blind batches need 1..4 actions and a 100..8000 ms deadline".into());
+    }
+    for action in &parsed.actions { preflight_blind_action(action)?; }
+    Ok(())
+}
+fn preflight_blind_action(action: &Action) -> R<()> {
+    let safe = match action {
+            Action::Type { text, text_method: TextMethod::Keyboard } =>
+                !text.is_empty() && text.len() <= 256 && text.bytes().all(|b| b.is_ascii_graphic() || b == b' '),
+            Action::Key { keys, key_scope: KeyScope::App } => {
+                let normalized: Vec<_> = keys.iter().map(|s| s.to_ascii_lowercase()).collect();
+                matches!(normalized.as_slice(), [key] if matches!(key.as_str(), "tab" | "return" | "enter" | "left" | "right" | "up" | "down" | "home" | "end" | "backspace" | "delete"))
+                    || matches!(normalized.as_slice(), [modifier, key] if (modifier == "ctrl" && matches!(key.as_str(), "a" | "l" | "s")) || (modifier == "shift" && key == "tab"))
+            }
+            Action::Wait { ms } => *ms <= 250,
+            _ => false,
+        };
+    if !safe { return Err("Observation disabled: only short explicit keyboard text, allowlisted app keys and <=250 ms waits are permitted; no pointer, AT-SPI, clipboard, launch, focus or close".into()); }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BlindTargetArgs {
+    task_id: String,
+    window_id: u64,
+    expected_session_id: String,
+    expected_epoch: u64,
+}
+fn blind_target(state: &State, args: &Value) -> R<Value> {
+    if state.observation_policy.enabled() { return Err("Blind targets are available only while observation is disabled".into()); }
+    let args: BlindTargetArgs = serde_json::from_value(args.clone()).map_err(|e| format!("Invalid blind target: {e}"))?;
+    if args.expected_session_id != state.session_id { return Err("Blind target belongs to another session".into()); }
+    check_epoch(state, Some(args.expected_epoch))?;
+    let _actor = state.actor.try_lock().map_err(|_| "Actor busy; blind target refused")?;
+    let _scope = state.task_scope_gate.lock().map_err(|_| "Task scope gate poisoned")?;
+    let scope_matches = state.task_scopes.lock().map_err(|_| "Task scopes poisoned")?
+        .get(&args.task_id).is_some_and(|s| s.is_live() && s.epoch == args.expected_epoch);
+    if !scope_matches || state.takeover.load(Ordering::SeqCst) || !state.release_confirmed.load(Ordering::SeqCst) {
+        return Err("Blind target requires the current live task, an unlatched and released actor".into());
+    }
+    let generation = state.input_policy.generation();
+    let _input = input_policy::Guard::bind(generation);
+    state.input_policy.check(generation)?;
+    let windows = niri_window_identities(state, Some(args.expected_epoch))?;
+    let target = focused(&windows).filter(|w| w["id"].as_u64() == Some(args.window_id))
+        .ok_or("Blind target must be the current exact focused window")?;
+    if target["pid"].as_u64().filter(|pid| *pid > 0).is_none()
+        || target["app_id"].as_str().filter(|app| !app.is_empty()).is_none() {
+        return Err("Blind target lacks a structural process/application identity".into());
+    }
+    let workspaces = niri_epoch(state, "workspaces", Some(args.expected_epoch))?;
+    let workspace = workspaces.as_array().and_then(|ws| ws.iter().find(|w| w["id"] == target["workspace_id"]))
+        .ok_or("Blind target workspace unavailable")?;
+    let output = workspace["output"].as_str().ok_or("Blind target output unavailable")?.to_string();
+    let outputs = niri_epoch(state, "outputs", Some(args.expected_epoch))?;
+    let geometry = outputs[&output]["logical"].clone();
+    let id = format!("blind-{}-{}", state.session_id, state.serial.fetch_add(1, Ordering::SeqCst));
+    let obs = Observation {
+        id: id.clone(), blind: true, blind_task: Some(args.task_id.clone()), observation_generation: state.observation_policy.generation(),
+        at: Instant::now(), epoch: args.expected_epoch, input_generation: generation,
+        output: output.clone(), output_geometry: geometry, focused_window: Some(target.clone()),
+        windows, focus_output: Some(output), image_width: 0, image_height: 0,
+        image: PathBuf::new(), view: Crop { x: 0, y: 0, width: 0, height: 0 }, view_image: PathBuf::new(),
+    };
+    validate(state, &obs, Some(args.window_id), false)?;
+    let mut saved = state.observations.lock().map_err(|_| "Observation storage poisoned")?;
+    // A single short-lived structural token is sufficient; no content cache.
+    saved.clear();
+    saved.insert(id.clone(), obs);
+    let mut data = json!({"schema":1,"observation_id":id,"target_kind":"structural_blind",
+        "session_id":state.session_id,"epoch":args.expected_epoch,"input_generation":generation,
+        "window_id":args.window_id,"task_id":args.task_id,"expires_after_ms":10000,
+        "screen_content_observed":false,"verification":"Structural target only; no visual or semantic result verification."});
+    observation_fields(state, &mut data);
+    Ok(text_result(data))
+}
+
 fn default_observe_after() -> bool {
     true
 }
@@ -443,6 +720,23 @@ fn action_scope_still_live(state: &State, task_id: &str) -> bool {
 // dispatch. Never hold task_scope_gate while waiting: physical Escape fences
 // this request through the epoch independently.
 fn indicator_phase(state: &State, task_id: &str, epoch: u64, phase: &str) -> R<()> {
+    let _phase = state.indicator_phase_gate.lock().map_err(|_| "Indicator phase gate poisoned")?;
+    let phase = if phase == "release" { current_indicator_phase(state)? } else { phase };
+    indicator_phase_unlocked(state, task_id, epoch, phase)
+}
+
+fn current_indicator_phase(state: &State) -> R<&'static str> {
+    if state.observation_policy.active() {
+        Ok("observing")
+    } else if !state.active.lock().map_err(|_| "Active state poisoned")?.is_null()
+        || !state.release_confirmed.load(Ordering::SeqCst) {
+        Ok("active")
+    } else {
+        Ok("release")
+    }
+}
+
+fn indicator_phase_unlocked(state: &State, task_id: &str, epoch: u64, phase: &str) -> R<()> {
     let scope = state.task_scopes.lock().map_err(|_| "Task scopes poisoned")?
         .get(task_id).cloned().ok_or("Indicator scope unavailable")?;
     let path = scope.indicator_socket.as_ref().ok_or("Indicator lacks synchronous phase support")?;
@@ -460,7 +754,9 @@ fn indicator_phase(state: &State, task_id: &str, epoch: u64, phase: &str) -> R<(
     stream.set_write_timeout(Some(Duration::from_millis(100))).map_err(|e| e.to_string())?;
     stream.set_read_timeout(Some(Duration::from_millis(10))).map_err(|e| e.to_string())?;
     let request = json!({"revision":1,"event":"phase","task_id":task_id,"session_id":state.session_id,
-        "epoch":epoch,"scope_token":token,"transition":transition,"phase":phase});
+        "epoch":epoch,"scope_token":token,"transition":transition,"phase":phase,
+        "observation_mode":state.observation_policy.mode(),
+        "observation_generation":state.observation_policy.generation()});
     writeln!(stream, "{request}").map_err(|_| "Indicator phase request failed")?;
     let deadline = Instant::now() + remaining_timeout(Duration::from_millis(500));
     let mut reply = Vec::new();
@@ -765,6 +1061,7 @@ fn bounded_command(
     timeout: Duration,
     epoch: Option<u64>,
 ) -> R<Vec<u8>> {
+    let _acquiring = if program == "cua-driver" { Some(begin_acquisition(state)?) } else { None };
     bounded_command_with_launch(state, program, args, input, timeout, epoch, None)
 }
 
@@ -775,7 +1072,20 @@ fn bounded_command_with_launch(
     input: Option<&[u8]>,
     timeout: Duration,
     epoch: Option<u64>,
+    launch: Option<(&mut dyn FnMut() -> R<()>, &mut launch::Receipt)>,
+) -> R<Vec<u8>> {
+    bounded_command_with_output(state, program, args, input, timeout, epoch, launch, false)
+}
+
+fn bounded_command_with_output(
+    state: &State,
+    program: &str,
+    args: &[String],
+    input: Option<&[u8]>,
+    timeout: Duration,
+    epoch: Option<u64>,
     mut launch: Option<(&mut dyn FnMut() -> R<()>, &mut launch::Receipt)>,
+    structural: bool,
 ) -> R<Vec<u8>> {
     check_epoch(state, epoch)?;
     let mut cmd = Command::new(program);
@@ -840,7 +1150,23 @@ fn bounded_command_with_launch(
     };
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
+    let structural_kind = if (structural || !state.observation_policy.enabled()) && program == "niri" {
+        args.get(2).filter(|_| args.first().is_some_and(|a| a == "msg") && args.get(1).is_some_and(|a| a == "-j")).cloned()
+    } else { None };
+    let discard_errors = structural_kind.is_some();
     let out = thread::spawn(move || {
+        if let Some(kind) = structural_kind {
+            let stdout = stdout.ok_or_else(|| io::Error::other("Missing structural inventory pipe"))?;
+            let reader = stdout.take(2 * 1024 * 1024);
+            let json_error = |_| io::Error::other("Invalid structural inventory");
+            return match kind.as_str() {
+                "windows" => serde_json::from_reader::<_, Vec<StructuralWindow>>(reader)
+                    .map_err(json_error).and_then(|v| serde_json::to_vec(&v).map_err(json_error)),
+                "workspaces" => serde_json::from_reader::<_, Vec<StructuralWorkspace>>(reader)
+                    .map_err(json_error).and_then(|v| serde_json::to_vec(&v).map_err(json_error)),
+                _ => { let mut bytes = Vec::new(); let mut reader = reader; reader.read_to_end(&mut bytes)?; Ok(bytes) },
+            };
+        }
         let mut bytes = Vec::new();
         if let Some(stdout) = stdout {
             stdout.take(32 * 1024 * 1024).read_to_end(&mut bytes)?;
@@ -850,7 +1176,8 @@ fn bounded_command_with_launch(
     let err = thread::spawn(move || {
         let mut bytes = Vec::new();
         if let Some(stderr) = stderr {
-            stderr.take(1024 * 1024).read_to_end(&mut bytes)?;
+            if discard_errors { io::copy(&mut stderr.take(1024 * 1024), &mut io::sink())?; }
+            else { stderr.take(1024 * 1024).read_to_end(&mut bytes)?; }
         }
         Ok::<Vec<u8>, io::Error>(bytes)
     });
@@ -914,7 +1241,20 @@ fn bounded_command_with_launch(
 fn niri(state: &State, kind: &str) -> R<Value> {
     niri_epoch(state, kind, None)
 }
+
+// Target validation needs no window titles. Select the streaming structural
+// decoder before spawning; never buffer full content and redact it afterwards.
+fn niri_window_identities(state: &State, epoch: Option<u64>) -> R<Value> {
+    let out = bounded_command_with_output(
+        state, "niri", &["msg".into(), "-j".into(), "windows".into()],
+        None, Duration::from_secs(3), epoch, None, true,
+    )?;
+    serde_json::from_slice(&out).map_err(|_| "Invalid structural inventory".into())
+}
 fn niri_epoch(state: &State, kind: &str, epoch: Option<u64>) -> R<Value> {
+    let _acquiring = if kind == "windows" && state.observation_policy.enabled() {
+        Some(begin_acquisition(state)?)
+    } else { None };
     let out = bounded_command(
         state,
         "niri",
@@ -997,6 +1337,7 @@ fn capture(
     timeout: Duration,
     epoch: u64,
 ) -> R<()> {
+    let _acquiring = begin_acquisition(state)?;
     {
         let _lifecycle = state
             .capture_failure
@@ -1129,6 +1470,7 @@ fn reference_pixels(
     epoch: u64,
     generation: u64,
 ) -> R<Arc<Pixels>> {
+    state.observation_policy.require_enabled()?;
     state.reference_cache.pixels(
         ReferenceKey {
             session: state.session_id.clone(),
@@ -1160,6 +1502,7 @@ fn visual_guard_with_capture(
     epoch: u64,
     mut capture_current: impl FnMut(&Path) -> R<()>,
 ) -> R<Value> {
+    state.observation_policy.require_enabled()?;
     preflight(obs, action)?;
     let points = match action {
         Action::Click { x, y, .. } | Action::Scroll { x, y, .. } => vec![(*x, *y)],
@@ -1315,6 +1658,7 @@ fn observe_inner(state: &State, args: &Value, actor_held: bool) -> R<Value> {
     observe_inner_guarded(state, args, actor_held, false)
 }
 fn observe_inner_guarded(state: &State, args: &Value, actor_held: bool, allowed_output_only: bool) -> R<Value> {
+    state.observation_policy.require_enabled()?;
     let start = Instant::now();
     let epoch = state.epoch.load(Ordering::SeqCst);
     record(state, "observe_request", json!({"epoch":epoch}));
@@ -1414,6 +1758,9 @@ fn observe_inner_guarded(state: &State, args: &Value, actor_held: bool, allowed_
         .map(str::to_owned);
     let obs = Observation {
         id: id.clone(),
+        blind: false,
+        blind_task: None,
+        observation_generation: state.observation_policy.generation(),
         at: capture_at,
         epoch,
         input_generation,
@@ -1495,17 +1842,21 @@ fn validate(
     window_id: Option<u64>,
     pointer_action: bool,
 ) -> R<()> {
-    if !state.capture_available.load(Ordering::SeqCst) {
+    if obs.observation_generation != state.observation_policy.generation()
+        || obs.blind == state.observation_policy.enabled() {
+        return Err("Observation policy changed; obtain a fresh target in the current mode".into());
+    }
+    if !obs.blind && !state.capture_available.load(Ordering::SeqCst) {
         return Err(
             "Capture unavailable; no input allowed until a successful fresh desktop_observe".into(),
         );
     }
     check_epoch(state, Some(obs.epoch))?;
     state.input_policy.check(obs.input_generation)?;
-    if obs.at.elapsed() > MAX_AGE {
+    if obs.at.elapsed() > if obs.blind { Duration::from_secs(10) } else { MAX_AGE } {
         return Err("Observation is older than 60 seconds; call desktop_observe again".into());
     }
-    let windows = niri_epoch(state, "windows", Some(obs.epoch))?;
+    let windows = niri_window_identities(state, Some(obs.epoch))?;
     let current = focused(&windows);
     let expected = window_id.or_else(|| obs.focused_window.as_ref().and_then(|w| w["id"].as_u64()));
     if expected.is_none() {
@@ -1523,7 +1874,8 @@ fn validate(
     if current.as_ref().map(identity) != obs.focused_window.as_ref().map(identity) {
         return Err("Window identity, workspace or geometry changed; observe again".into());
     }
-    if pointer_action {
+    if pointer_action || obs.blind {
+        if pointer_action { state.observation_policy.require_enabled()?; }
         if obs.focus_output.as_deref() != Some(obs.output.as_str()) {
             return Err("Captured output does not contain focused target workspace; focus desired window then observe its output".into());
         }
@@ -1837,6 +2189,7 @@ fn button(name: &Option<String>) -> R<Button> {
     }
 }
 fn atspi_helper(state: &State, request: Value, epoch: u64) -> R<Value> {
+    let _acquiring = begin_acquisition(state)?;
     let bytes = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
     if bytes.len() > 2 * 1024 * 1024 {
         return Err("Direct accessibility helper request exceeds private2MiB budget".into());
@@ -1857,6 +2210,7 @@ fn atspi_helper(state: &State, request: Value, epoch: u64) -> R<Value> {
         .map_err(|e| format!("Direct AT-SPI helper returned invalid JSON: {e}"))
 }
 fn semantic_target(state: &State, obs: &Observation, handle: &str) -> R<SemanticTarget> {
+    state.observation_policy.require_enabled()?;
     let target=state.semantic_targets.lock().map_err(|_|"Semantic handle cache poisoned")?.get(handle).cloned().ok_or("Semantic handle unknown; call desktop_semantic_direct first. Foreign Cua/index/object tokens are not accepted.")?;
     check_epoch(state, Some(target.epoch))?;
     if !target.background {
@@ -1988,6 +2342,7 @@ fn execute(
     epoch: u64,
     details: &mut Value,
 ) -> R<()> {
+    if !state.observation_policy.enabled() { preflight_blind_action(action)?; }
     check_epoch(state, Some(epoch))?;
     if action.pointer() && pointer.is_none() {
         *pointer = Some(
@@ -2329,10 +2684,11 @@ fn act(state: &State, args: &Value, epoch: u64) -> R<Value> {
 
 fn act_inner(state: &State, args: &Value, epoch: u64) -> R<Value> {
     let start = Instant::now();
+    let blind = !state.observation_policy.enabled();
     if !state.release_confirmed.load(Ordering::SeqCst) {
         return Err("Previous actuator release/receipt is unconfirmed; call desktop_recover_release explicitly while idle. No new input allowed.".into());
     }
-    if !state.capture_available.load(Ordering::SeqCst) {
+    if !blind && !state.capture_available.load(Ordering::SeqCst) {
         return Err(
             "No successful current capture available; call desktop_observe before input".into(),
         );
@@ -2345,10 +2701,11 @@ fn act_inner(state: &State, args: &Value, epoch: u64) -> R<Value> {
     }
     let parsed: ActArgs = serde_json::from_value(args.clone())
         .map_err(|e| format!("Invalid action arguments: {e}"))?;
+    if blind { preflight_blind_batch(&parsed)?; }
     if let Some(guard) = &parsed.expected_global_backend {
         validate_global_backend_guard(guard, &state.session_id, epoch, &parsed.observation_id)?;
     }
-    let timeout = Duration::from_millis(parsed.timeout_ms.unwrap_or(30000).clamp(100, 120000));
+    let timeout = Duration::from_millis(parsed.timeout_ms.unwrap_or(if blind { 8000 } else { 30000 }).clamp(100, 120000));
     let _deadline = DeadlineGuard::set(Some(start + timeout));
     if parsed.settle_ms > 1000 {
         return Err(
@@ -2387,6 +2744,15 @@ fn act_inner(state: &State, args: &Value, epoch: u64) -> R<Value> {
         .get(&parsed.observation_id)
         .cloned()
         .ok_or("Observation missing; call desktop_observe first")?;
+    if obs.blind != blind || obs.observation_generation != state.observation_policy.generation() {
+        return Err("Target belongs to another observation mode/generation; obtain a fresh target".into());
+    }
+    if blind && parsed.task_id != obs.blind_task {
+        return Err("Blind target is bound to a different task".into());
+    }
+    if blind && (parsed.task_id.is_none() || !action_scope_still_live(state, parsed.task_id.as_deref().unwrap_or(""))) {
+        return Err("Blind actions require the current live indicator task".into());
+    }
     let background_semantic = parsed.actions.iter().all(|action| match action {
         Action::SemanticSetValue { handle_id, .. } | Action::SemanticClick { handle_id, .. } =>
             state.semantic_targets.lock().is_ok_and(|targets| targets.get(handle_id).is_some_and(|t| t.background)),
@@ -2562,7 +2928,7 @@ fn act_inner(state: &State, args: &Value, epoch: u64) -> R<Value> {
                 }
                 validate_launch_state(state, &obs, epoch)?;
             }
-            if !background_semantic && action.launch().is_none() && !matches!(action, Action::Focus { .. } | Action::Wait { .. }) {
+            if !background_semantic && action.launch().is_none() && (blind || !matches!(action, Action::Focus { .. } | Action::Wait { .. })) {
                 validate(state, &obs, parsed.window_id, action.pointer())?;
             }
             if action.pointer() {
@@ -2656,7 +3022,7 @@ fn act_inner(state: &State, args: &Value, epoch: u64) -> R<Value> {
     let mut after_error = None;
     let after_start = Instant::now();
     let mut settle_wait_ms = 0.0;
-    if parsed.observe_after
+    if !blind && parsed.observe_after
         && failure.is_none()
         && !own_canceled()
         && state.epoch.load(Ordering::SeqCst) == epoch
@@ -2699,6 +3065,14 @@ fn act_inner(state: &State, args: &Value, epoch: u64) -> R<Value> {
     }
     let mut data = json!({"schema":1,"task_id":task,"observation_id":obs.id,"accepted_actions":args["actions"],"background_semantic":background_semantic,"status":if canceled{"canceled"}else if input_conflict{"input_conflict"}else if failure.is_some(){"failed"}else{"dispatched"},"input_conflict":input_conflict,"expected_input_generation":obs.input_generation,"input_generation":state.input_policy.generation(),"fresh_observation_required":input_conflict,"takeover_latched":state.takeover.load(Ordering::SeqCst),"automatic_replay":false,"completed_actions":completed,"requested_actions":parsed.actions.len(),"effects":effects,"error":failure,"actor_release_confirmed":cleanup_ok,"timing_ms":{"dispatch_and_release":dispatch_ms,"post_action_settle_wait":settle_wait_ms,"post_observe":after_start.elapsed().as_secs_f64()*1000.0},"total_ms":start.elapsed().as_secs_f64()*1000.0,"after_observation_error":after_error,"verification":"Input acknowledgement only. after_observation is fresh evidence to inspect, not inferred UI success. Verify the expected UI state or independent artifact before reporting success."});
     let mut image_blocks = Vec::new();
+    if blind {
+        data.as_object_mut().unwrap().remove("accepted_actions");
+        data["verification"] = json!("Input acknowledgement only; no screen, semantic or clipboard content was read or verified.");
+        // Do not echo typed text, helper stderr or an app-provided response.
+        for effect in data["effects"].as_array_mut().unwrap() { effect["details"] = Value::Null; }
+        if data["error"].is_string() { data["error"] = json!("Blind action stopped or failed; obtain a fresh structural target before deliberate continuation"); }
+    }
+    observation_fields(state, &mut data);
     if let Some(after) = after {
         if let Some(content) = after["content"].as_array() {
             for block in content {
@@ -2730,6 +3104,7 @@ fn act_inner(state: &State, args: &Value, epoch: u64) -> R<Value> {
 }
 
 fn semantic(state: &State, args: &Value) -> R<Value> {
+    state.observation_policy.require_enabled()?;
     let start = Instant::now();
     let id = args["window_id"]
         .as_u64()
@@ -2820,6 +3195,7 @@ fn semantic(state: &State, args: &Value) -> R<Value> {
 }
 
 fn semantic_direct(state: &State, args: &Value) -> R<Value> {
+    state.observation_policy.require_enabled()?;
     let started = Instant::now();
     let epoch = state.epoch.load(Ordering::SeqCst);
     let id = args["window_id"]
@@ -2907,6 +3283,7 @@ fn semantic_snapshot_result(
     input_generation: u64,
     started: Instant,
 ) -> R<Value> {
+    state.observation_policy.require_enabled()?;
     let id = window["id"]
         .as_u64()
         .ok_or("Semantic target has no Niri ID")?;
@@ -3049,6 +3426,9 @@ fn finalize_semantic_handles(
 }
 
 fn validate_retained_observation(state: &State, obs: &Observation, shared_input: bool) -> R<()> {
+    if obs.observation_generation != state.observation_policy.generation() {
+        return Err("Observation policy generation changed; target is invalid".into());
+    }
     if shared_input { state.input_policy.check(obs.input_generation)?; }
     if !state
         .observations
@@ -3181,6 +3561,7 @@ fn recover_release(state: &State, args: &Value) -> R<Value> {
 }
 
 fn accept_capture(state: &State) -> R<()> {
+    state.observation_policy.require_enabled()?;
     let mut failure = state
         .capture_failure
         .lock()
@@ -3364,7 +3745,9 @@ fn indicator_lifecycle(state: &State, args: &Value) -> R<Value> {
                             scope.owner_processes = Some(processes);
                         }
                         if scope.indicator_socket != indicator_socket { return Err("Indicator socket cannot be replaced".into()); }
-                        return Ok(text_result(json!({"schema":1,"lifecycle_revision":4,"complete":true,"session_id":state.session_id,"epoch":state.epoch.load(Ordering::SeqCst),"takeover_latched":false,"actor_active":false,"task_scope_active":true,"task_scope_lifetime":if scope.owner_processes.is_some(){"owner_process"}else{"legacy_deadline"},"queued_batches":state.queued.load(Ordering::SeqCst),"actor_release_confirmed":true})))
+                        let mut reply = json!({"schema":1,"lifecycle_revision":4,"complete":true,"session_id":state.session_id,"epoch":state.epoch.load(Ordering::SeqCst),"takeover_latched":false,"actor_active":false,"task_scope_active":true,"task_scope_lifetime":if scope.owner_processes.is_some(){"owner_process"}else{"legacy_deadline"},"queued_batches":state.queued.load(Ordering::SeqCst),"actor_release_confirmed":true});
+                        observation_fields(state, &mut reply);
+                        return Ok(text_result(reply))
                     }
                     None => {
                         scope.scope_token = Some(scope_token.to_string());
@@ -3433,16 +3816,32 @@ fn indicator_lifecycle(state: &State, args: &Value) -> R<Value> {
     if task_id.is_some() {
         reply["task_scope_lifetime"] = json!(if owner_bound { "owner_process" } else { "legacy_deadline" });
     }
+    observation_fields(state, &mut reply);
     Ok(text_result(reply))
 }
 
 fn handle(state: &State, tool: &str, args: &Value, epoch: u64) -> R<Value> {
+    let _read = if privacy_fenced_tool(tool) {
+        Some(state.observation_policy.gate.read().map_err(|_| "Observation policy lock poisoned")?)
+    } else { None };
+    handle_inner(state, tool, args, epoch)
+}
+fn handle_inner(state: &State, tool: &str, args: &Value, epoch: u64) -> R<Value> {
     match tool {
+        "desktop_set_observation_mode" => set_observation_mode(state, args),
+        "desktop_blind_target" => blind_target(state, args),
         "desktop_indicator_lifecycle" => indicator_lifecycle(state, args),
         "desktop_status" => {
             let capture = capture_status(state)?;
             let readiness = resume_input_readiness(state)?;
-            let mut data = json!({"schema":1,"version":"0.1.0","session_id":state.session_id,"resume_binding_revision":RESUME_BINDING_REVISION,"interface_revision":GLOBAL_ROUTING_REVISION,"global_keyboard":global_keyboard_capability(),"desktop":"niri-wayland","epoch":state.epoch.load(Ordering::SeqCst),"queued_batches":state.queued.load(Ordering::SeqCst),"active":*state.active.lock().map_err(|_|"Active state poisoned")?,"last_result":*state.last_result.lock().map_err(|_|"Last result state poisoned")?,"actor_release_confirmed":state.release_confirmed.load(Ordering::SeqCst),"capture_available":state.capture_available.load(Ordering::SeqCst),"fresh_observation_required_after_capture_failure":true,"uptime_ms":state.started.elapsed().as_millis(),"takeover_latched":state.takeover.load(Ordering::SeqCst),"takeover_persistence":state.takeover_marker.lock().map_err(|_|"Takeover marker state poisoned")?.status(),"input_policy":state.input_policy.status(state.last_human_ms.load(Ordering::SeqCst)),"human_input_monitor":*state.human_monitor.lock().map_err(|_|"Human input monitor state poisoned")?});
+            let last_result = if state.observation_policy.enabled() {
+                state.last_result.lock().map_err(|_| "Last result state poisoned")?.clone()
+            } else { Value::Null };
+            let mut data = json!({"schema":1,"version":"0.1.0","session_id":state.session_id,"resume_binding_revision":RESUME_BINDING_REVISION,"interface_revision":GLOBAL_ROUTING_REVISION,"global_keyboard":global_keyboard_capability(),"desktop":"niri-wayland","epoch":state.epoch.load(Ordering::SeqCst),"queued_batches":state.queued.load(Ordering::SeqCst),"active":*state.active.lock().map_err(|_|"Active state poisoned")?,"last_result":last_result,"actor_release_confirmed":state.release_confirmed.load(Ordering::SeqCst),"capture_available":state.capture_available.load(Ordering::SeqCst),"fresh_observation_required_after_capture_failure":true,"uptime_ms":state.started.elapsed().as_millis(),"takeover_latched":state.takeover.load(Ordering::SeqCst),"takeover_persistence":state.takeover_marker.lock().map_err(|_|"Takeover marker state poisoned")?.status(),"input_policy":state.input_policy.status(state.last_human_ms.load(Ordering::SeqCst)),"human_input_monitor":*state.human_monitor.lock().map_err(|_|"Human input monitor state poisoned")?});
+            observation_fields(state, &mut data);
+            if !state.observation_policy.enabled() {
+                data["last_result"] = Value::Null;
+            }
             for (key, value) in capture.as_object().unwrap() {
                 data[key] = value.clone();
             }
@@ -3454,9 +3853,11 @@ fn handle(state: &State, tool: &str, args: &Value, epoch: u64) -> R<Value> {
             data["desktop_launch"] = launch::capability();
             Ok(text_result(data))
         }
-        "desktop_windows" => Ok(text_result(
+        "desktop_windows" => {
+            state.observation_policy.require_enabled()?;
+            Ok(text_result(
             json!({"schema":1,"windows":niri(state,"windows")?,"outputs":niri(state,"outputs")?,"workspaces":niri(state,"workspaces")?}),
-        )),
+        ))},
         "desktop_observe" => observe(state, args),
         "desktop_semantic" => semantic(state, args),
         "desktop_semantic_direct" => semantic_direct(state, args),
@@ -3897,12 +4298,14 @@ fn tools() -> Value {
     let action = action_schema();
     let crop = json!({"type":"object","properties":{"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"width":{"type":"integer","minimum":1},"height":{"type":"integer","minimum":1}},"required":["x","y","width","height"]});
     let mut catalog = json!([
+      {"name":"desktop_set_observation_mode","description":"Set explicit desktop content permission to enabled or disabled. Serialized with all content acquisition and response delivery; clears cached images, observations and semantic handles using a separate observation_generation, preserving the live task and Stop epoch. Disabled permits no screenshot, AT-SPI, clipboard readback or title discovery. Enabled means permitted, observation_active means actual acquisition. No action automatically enables observation.","inputSchema":{"type":"object","properties":{"mode":{"type":"string","enum":["enabled","disabled"]}},"required":["mode"],"additionalProperties":false}},
+      {"name":"desktop_blind_target","description":"Only while observation is disabled: obtain a 10-second structural target token for the exact already-focused window and current indicator task, session and epoch. Does not capture screen pixels, titles, accessibility or clipboard. Freshly checks released input, process/window/workspace/output identity. Use its observation_id with desktop_act, explicit observe_after=false and include_image=false. No input is sent by this tool.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"},"window_id":{"type":"integer"},"expected_session_id":{"type":"string"},"expected_epoch":{"type":"integer"}},"required":["task_id","window_id","expected_session_id","expected_epoch"],"additionalProperties":false}},
       {"name":"desktop_status","description":"Persistent Niri desktop actor status, active/preparing task, queued batches, cancel epoch and escape_policy=cancel_current_task. Physical Escape cancels current work without a persistent latch or unlock ceremony; idle Escape only invalidates observations. Stopped task IDs and stale observations cannot resume. Reports independent capture attempt/failure evidence and shared resume_input_readiness; capture_available=false alone is not capture failure. Startup capture_not_attempted=true is expected. Readiness is only a snapshot, not user permission or actor release. Advertises global_keyboard routing_revision=2 only when this software implements scoped owned-uinput routing; this is not a live device/UI-success attestation. Does not capture or act.","inputSchema":{"type":"object","properties":{}}},
       {"name":"desktop_windows","description":"Read actual Niri windows, outputs and workspaces. Window layout may lack global app bounds; never invent bounds.","inputSchema":{"type":"object","properties":{}}},
       {"name":"desktop_observe","description":"Capture one actual laptop output via grim at scale1, plus Niri identities. Startup capture_not_attempted=true is expected and permits this first read-only observation. Input always requires accepted fresh observation and action_ready; prior successful capture is not a prerequisite for authorized startup resume. Optional crop uses full-output screenshot pixels x/y/width/height; action x/y then use local pixels of the displayed crop. Core translates crop origin; NEVER add compositor output origin. Actual PNG size can differ from Niri logical size by rounding. Observation expires in60seconds; identity/geometry and fresh target-region guards still run. Observe after focus/workspace/layout changes. include_image=false returns private PNG reference only.","inputSchema":{"type":"object","properties":{"output":{"type":"string"},"include_image":{"type":"boolean"},"crop":crop}}},
       {"name":"desktop_semantic","description":"Read fresh Cua AT-SPI elements for a Niri window. Maps only unique actual PID+title; synthetic Cua IDs are never guessed. Query filters returned elements. Accessibility bounds are app-local and NOT screenshot coordinates; do not directly click them without calibrated mapping. Limited/root-only trees require visual fallback.","inputSchema":{"type":"object","properties":{"window_id":{"type":"integer"},"query":{"type":"string"},"max_elements":{"type":"integer"},"max_depth":{"type":"integer"}},"required":["window_id"]}},
       {"name":"desktop_semantic_direct","description":"Read exact-window AT-SPI labels/tree even during ordinary physical activity or held controls. Set background=true for direct click/set_value on a visible target without moving the pointer or requesting focus; unrelated physical input does not invalidate those handles. Original object/context, target output and Escape are still checked; an app may itself change focus after an action. Returns original/current input generation and explicit input/action readiness. Non-actionable or incomplete snapshots issue no handles (focus/click/set_value=false); obtain a fresh complete snapshot after controls release. Only daemon-owned handles from actionable complete snapshots may be used with desktop_act semantic_set_value, semantic_click or standalone semantic_focus. focusable/FOCUSED flags attest element keyboard focus separately from Niri window focus; semantic_focus requires fresh complete semantics and verifies FOCUSED on the same exact object before returning focus_verified. Reobserve and requery semantics before later keyboard input. No raw object/index/Cua tokens and no pixel fallback. Native GTK candidates need live acceptance; missing/incomplete bridges use visual typed actions.","inputSchema":{"type":"object","properties":{"window_id":{"type":"integer"},"query":{"type":"string"},"max_elements":{"type":"integer"},"max_depth":{"type":"integer"},"background":{"type":"boolean","description":"Object-targeted click/edit on a visible target window without requesting focus or moving the pointer; no pointer, clipboard, keyboard or focus fallback."},"include_text_selection":{"type":"boolean","description":"Opt-in bounded selection readback for at most one showing enabled FOCUSED unprotected Text object; unicode codepoint [start,end). Explicit available/unsupported/error, no input authority; check fresh generation, complete tree and text identity separately."}},"required":["window_id"]}},
-      {"name":"desktop_act","description":"Standalone launch_app(app:zed|chrome), editor_open_project(project:jarvis) and editor_open_file(project:jarvis,relative_path) spawn pinned isolated apps on the observed active output. OS spawn ACK is not UI success; uncertain spawn requires verification, no auto retry. Single-writer typed desktop actions against fresh observation. With a live task indicator, every call must include that exact task_id; old, ended or mismatched task identities are refused, while multiple batches in the same live scope are allowed. Rejects changed focus/geometry/scaling or changed pixels near pointer targets. x/y are local to displayed screenshot/crop. Every move/click/scroll/drag requires the displayed view to be at most1200 pixels on each axis; an oversized view rejects the whole batch before any input, queue admission or device preparation. Capture a fresh target crop and use its crop-local coordinates. Full images remain usable for overview, focus, keys and semantics. Focus must be standalone. close_window(window_id) is standalone with the same top-level window_id, exact fresh focused target/title/output; caller proves task ownership and safe saved state. Explicit close request acknowledgement is not window disappearance; inspect fresh inventory and any save modal. No PID kill or blind cleanup. Unknown or misplaced fields for an action kind reject the whole batch before input; restore_clipboard belongs only to paste, while type always preserves the prior selection. By default observe_after=true returns a new after_observation ID and image in this same response after dispatch/release and a bounded80ms defaultsettle wait; settle_ms=0..1000 can adjust. Use it for the next act and inspect expected result. A slow/unchanged frame needs another observation/semantic check, not repetition of toggle input. include_image=false omits its image. Acknowledgement is not UI success. Type text_method=auto uses clipboard for known Electron IDs (code/T3) and >1000-character text, keyboard for shorter text in other apps; explicit keyboard/clipboard are available. Electron wtype Unicode is unreliable on this laptop. Clipboard preserves supported text/rich app payloads and original Chromium provenance in bounded RAM from one offer, normalizes duplicate MIME names, omits SAVE_TARGETS and SAME_APP GTK_TEXT_BUFFER_CONTENTS transport markers, preserves serialized GTK rich text, and keeps a separate source holder across actor restarts. Unsupported/sensitive/oversized formats refuse before replacement. Own-source check runs after layout/keymap/window validation and before the first paste modifier press; ownership can still change between reply and input because Wayland has no atomic selection-check-and-paste. No restore after takeover/cancel/ownership loss. Scroll dx/dy are discrete wheel steps (integer -100..100), not pixels; positive dx moves right and positive dy moves down. Smooth-scroll animation needs another fresh observation/settle check before reusing visual targets. Keys are modifiers first e.g.[ctrl,l],[Return]. Explicit key_scope=compositor and Super/meta/logo chords use an owned persistent direct-uinput device because this Niri25.11 Wayland virtual keyboard bypasses compositor bindings; Ctrl/app chords retain the Wayland transport. A fresh proxy check requires backend routing_revision=2 and binds session/epoch/observation before forwarding a global batch; an older backend is refused. Missing permission/takeover monitor/compositor device-open evidence refuses the complete batch before input. Creating the own device is a capability side effect. A kernel input acknowledgement does not verify Niri/UI acceptance; inspect the fresh result. No automatic input fallback. Direct semantic_set_value(handle_id,text,expected_text optional) replaces exact editable contents; semantic_click(handle_id,action_name from direct tree) invokes only AT-SPI named action. Both freshly revalidate context and have no input fallback. Standalone semantic_focus(handle_id) uses Component.GrabFocus, then repeats exact object/window/context validation and freshly queries FOCUSED; acceptance alone is not focus_verified. It sends no keyboard input or fallback. Reobserve and requery the exact focused object before keyboard input. Batch stable edits/shortcuts when intermediate states cannot invalidate later targets; changed-target actions need fresh observation.","inputSchema":{"type":"object","properties":{"observation_id":{"type":"string"},"window_id":{"type":"integer"},"task_id":{"type":"string"},"timeout_ms":{"type":"integer","minimum":100,"maximum":120000,"description":"Whole batch deadline; release cleanup follows timeout."},"observe_after":{"type":"boolean","default":true},"include_image":{"type":"boolean","default":true},"settle_ms":{"type":"integer","default":80,"minimum":0,"maximum":1000,"description":"Post-action wait before capture; reobserve slow states, never replay blindly."},"actions":{"type":"array","items":action,"minItems":1,"maxItems":32}},"required":["observation_id","actions","task_id"]}},
+      {"name":"desktop_act","description":"Standalone launch_app(app:zed|chrome), editor_open_project(project:jarvis) and editor_open_file(project:jarvis,relative_path) spawn pinned isolated apps on the observed active output. OS spawn ACK is not UI success; uncertain spawn requires verification, no auto retry. Single-writer typed desktop actions against fresh observation. With a live task indicator, every call must include that exact task_id; old, ended or mismatched task identities are refused, while multiple batches in the same live scope are allowed. Rejects changed focus/geometry/scaling or changed pixels near pointer targets. x/y are local to displayed screenshot/crop. Every move/click/scroll/drag requires the displayed view to be at most1200 pixels on each axis; an oversized view rejects the whole batch before any input, queue admission or device preparation. Capture a fresh target crop and use its crop-local coordinates. Full images remain usable for overview, focus, keys and semantics. Focus must be standalone. close_window(window_id) is standalone with the same top-level window_id, exact fresh focused target/title/output; caller proves task ownership and safe saved state. Explicit close request acknowledgement is not window disappearance; inspect fresh inventory and any save modal. No PID kill or blind cleanup. Unknown or misplaced fields for an action kind reject the whole batch before input; restore_clipboard belongs only to paste, while type always preserves the prior selection. By default observe_after=true returns a new after_observation ID and image in this same response after dispatch/release and a bounded80ms defaultsettle wait; settle_ms=0..1000 can adjust. Use it for the next act and inspect expected result. A slow/unchanged frame needs another observation/semantic check, not repetition of toggle input. include_image=false omits its image. Acknowledgement is not UI success. Type text_method=auto uses clipboard for known Electron IDs (code/T3) and >1000-character text, keyboard for shorter text in other apps; explicit keyboard/clipboard are available. Electron wtype Unicode is unreliable on this laptop. Clipboard preserves supported text/rich app payloads and original Chromium provenance in bounded RAM from one offer, normalizes duplicate MIME names, omits SAVE_TARGETS and SAME_APP GTK_TEXT_BUFFER_CONTENTS transport markers, preserves serialized GTK rich text, and keeps a separate source holder across actor restarts. Unsupported/sensitive/oversized formats refuse before replacement. Own-source check runs after layout/keymap/window validation and before the first paste modifier press; ownership can still change between reply and input because Wayland has no atomic selection-check-and-paste. No restore after takeover/cancel/ownership loss. Scroll dx/dy are discrete wheel steps (integer -100..100), not pixels; positive dx moves right and positive dy moves down. Smooth-scroll animation needs another fresh observation/settle check before reusing visual targets. Keys are modifiers first e.g.[ctrl,l],[Return]. Explicit key_scope=compositor and Super/meta/logo chords use an owned persistent direct-uinput device because this Niri25.11 Wayland virtual keyboard bypasses compositor bindings; Ctrl/app chords retain the Wayland transport. A fresh proxy check requires backend routing_revision=2 and binds session/epoch/observation before forwarding a global batch; an older backend is refused. Missing permission/takeover monitor/compositor device-open evidence refuses the complete batch before input. Creating the own device is a capability side effect. A kernel input acknowledgement does not verify Niri/UI acceptance; inspect the fresh result. No automatic input fallback. Direct semantic_set_value(handle_id,text,expected_text optional) replaces exact editable contents; semantic_click(handle_id,action_name from direct tree) invokes only AT-SPI named action. Both freshly revalidate context and have no input fallback. Standalone semantic_focus(handle_id) uses Component.GrabFocus, then repeats exact object/window/context validation and freshly queries FOCUSED; acceptance alone is not focus_verified. It sends no keyboard input or fallback. Reobserve and requery the exact focused object before keyboard input. Batch stable edits/shortcuts when intermediate states cannot invalidate later targets; changed-target actions need fresh observation. When observation is disabled, obtain desktop_blind_target first: only explicit keyboard text (printable ASCII, at most256 bytes), a narrow app-key allowlist and waits up to250ms are accepted with observe_after=false and include_image=false. Auto text, paste, clipboard shortcuts, pointer, AT-SPI, focus, close and launch are refused. The private batch deadline is at most8000ms. Input acknowledgement is never content verification.","inputSchema":{"type":"object","properties":{"observation_id":{"type":"string"},"window_id":{"type":"integer"},"task_id":{"type":"string"},"timeout_ms":{"type":"integer","minimum":100,"maximum":120000,"description":"Whole batch deadline; release cleanup follows timeout."},"observe_after":{"type":"boolean","default":true},"include_image":{"type":"boolean","default":true},"settle_ms":{"type":"integer","default":80,"minimum":0,"maximum":1000,"description":"Post-action wait before capture; reobserve slow states, never replay blindly."},"actions":{"type":"array","items":action,"minItems":1,"maxItems":32}},"required":["observation_id","actions","task_id"]}},
       {"name":"desktop_cancel","description":"Priority epoch cancellation independent of actor lock. Pending batches stop; held buttons release. Already-dispatched effects remain. Wait for desktop_status active=null and actor_release_confirmed=true for full release.","inputSchema":{"type":"object","properties":{}}},
       {"name":"desktop_takeover","description":"Explicit human desktop takeover, persists its cause across backend restarts and latches refusal of future actions and cancels queued/active automation. Physical Escape cancels only queued/preparing/running work or a live task-indicator scope without latching future tasks; idle Escape only invalidates stale observations. Ordinary input invalidates stale observations and releases a conflicting batch without latching takeover. Wait active=null and actor_release_confirmed=true for full release. desktop_resume then fresh observation is required.","inputSchema":{"type":"object","properties":{}}},
       {"name":"desktop_recover_release","description":"Explicit bounded recovery of unconfirmed release/receipt on existing owned actuators only. Refuses if writer busy, active task or queue nonempty. Sends only releases of owned held buttons/keys and receipt sync, no press/move/device creation/action replay, no epoch/latch/cause reset, no automatic resume. May finalize effects of already-held input. Default1500ms, maximum2000ms shared budget. Failure remains unconfirmed; original last_result preserved. Success invalidates old observations/semantic handles and requires fresh capture; inspect status queue and follow human return-of-control policy before resume.","inputSchema":{"type":"object","properties":{"timeout_ms":{"type":"integer","minimum":200,"maximum":2000,"default":1500}},"additionalProperties":false}},
@@ -3924,7 +4327,7 @@ fn tools() -> Value {
             tool["description"] = json!(format!("{description} MCP metadata is compact by default; detailed=true returns full original metadata. desktop_windows retains full display mode catalogs."));
         }
         let (read_only, destructive, open_world) = match tool["name"].as_str() {
-            Some("desktop_status") => (true, false, false),
+            Some("desktop_status" | "desktop_blind_target") => (true, false, false),
             Some(
                 "desktop_windows"
                 | "desktop_observe"
@@ -3932,7 +4335,7 @@ fn tools() -> Value {
                 | "desktop_semantic_direct",
             ) => (true, false, true),
             Some("desktop_recover_release") => (false, true, true),
-            Some("desktop_cancel" | "desktop_takeover" | "desktop_resume") => (false, false, false),
+            Some("desktop_cancel" | "desktop_takeover" | "desktop_resume" | "desktop_set_observation_mode") => (false, false, false),
             _ => (false, true, true),
         };
         tool["annotations"] = json!({
@@ -4051,6 +4454,9 @@ fn daemon_call_owned(
         if let Some(noop) = resume_proxy_preflight(args, &status)? {
             return Ok(noop);
         }
+        // This internal status is consumed, never forwarded as content. Do not
+        // hold its read lease while issuing another request behind a writer.
+        release_proxy_deliveries();
         // A replacement old backend cannot ignore binding fields: it does not
         // implement this new wire method and must refuse Unknown tool.
         return daemon_call_transport(
@@ -4077,6 +4483,7 @@ fn daemon_call_owned(
             budget.min(Duration::from_secs(2)),
         )?;
         let mut guarded = guarded_global_arguments(args, &status)?;
+        release_proxy_deliveries();
         let remaining = budget.saturating_sub(started.elapsed());
         if remaining < Duration::from_millis(100) {
             return Err(
@@ -4137,20 +4544,33 @@ fn daemon_call_transport(
     } else {
         None
     };
+    let fenced = privacy_fenced_tool(tool) && PROXY_DELIVERIES.with(|f| f.borrow().is_some());
     let result = (|| {
-        writeln!(stream, "{}", json!({"tool":tool,"arguments":args})).map_err(|e| e.to_string())?;
+        writeln!(stream, "{}", json!({"tool":tool,"arguments":args,"response_fence":fenced})).map_err(|e| e.to_string())?;
         let mut line = String::new();
-        BufReader::new(stream)
+        BufReader::new(&stream)
             .read_line(&mut line)
             .map_err(|e| e.to_string())?;
         if line.is_empty() {
             return Err("MCP request canceled/disconnected while backend was executing; inspect desktop_status last_result and reobserve before continuing".into());
         }
-        serde_json::from_str(&line).map_err(|e| e.to_string())
+        let mut value: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+        if fenced {
+            if value["_observation_delivery_fence"] != 1 {
+                return Err("Backend lacks the observation delivery fence; response withheld. Reconnect to the current backend.".into());
+            }
+            value.as_object_mut().ok_or("Invalid fenced response")?.remove("_observation_delivery_fence");
+        }
+        Ok(value)
     })();
     done.store(true, Ordering::SeqCst);
     if let Some(monitor) = monitor {
         let _ = monitor.join();
+    }
+    if fenced && result.is_ok() {
+        PROXY_DELIVERIES.with(|f| {
+            if let Some(deliveries) = f.borrow_mut().as_mut() { deliveries.push(stream); }
+        });
     }
     result
 }
@@ -4227,6 +4647,8 @@ fn serve(socket: &Path) -> R<()> {
         capture_available: AtomicBool::new(false),
         capture_attempts: AtomicU64::new(0),
         capture_failure: Mutex::new(None),
+        observation_policy: observation_policy::Policy::default(),
+        indicator_phase_gate: Mutex::new(()),
         active: Mutex::new(Value::Null),
         task_scopes: Mutex::new(HashMap::new()),
         task_scope_ids: Mutex::new(HashSet::new()),
@@ -4297,20 +4719,34 @@ fn serve(socket: &Path) -> R<()> {
                     }
                 }
             });
-            let result = (|| {
-                let req: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
-                handle(
-                    &state,
-                    req["tool"].as_str().ok_or("Missing tool name")?,
-                    &req["arguments"],
-                    epoch,
-                )
-            })();
+            let req = serde_json::from_str::<Value>(&line);
+            let tool = req.as_ref().ok().and_then(|r| r["tool"].as_str()).unwrap_or("").to_string();
+            // This guard deliberately outlives serialization, socket write and
+            // the optional MCP-delivery ACK. Direct socket clients cannot
+            // cause a later daemon write after a successful mode transition.
+            let lease = if privacy_fenced_tool(&tool) { state.observation_policy.gate.read().ok() } else { None };
+            let fenced = req.as_ref().is_ok_and(|r| r["response_fence"] == true) && lease.is_some();
+            let result = match req {
+                Ok(_) if privacy_fenced_tool(&tool) && !fenced =>
+                    Err("This request requires an observation delivery fence; use the current MCP or CLI proxy".into()),
+                Ok(req) if !privacy_fenced_tool(&tool) || lease.is_some() =>
+                    handle_inner(&state, &tool, &req["arguments"], epoch),
+                Ok(_) => Err("Observation policy lock poisoned".into()),
+                Err(error) => Err(error.to_string()),
+            };
+            let mut value = result.unwrap_or_else(error_result);
+            if fenced { value["_observation_delivery_fence"] = json!(1); }
+            if writeln!(stream, "{value}").is_ok() && fenced {
+                // No timeout silently drops the lease while a live proxy can
+                // still flush old bytes. A crashed/disconnected proxy yields
+                // EOF; a blocked proxy keeps mode switching honestly pending.
+                let mut ack = [0u8; 10];
+                let _ = stream.read_exact(&mut ack);
+            }
+            drop(lease);
             done.store(true, Ordering::SeqCst);
             let _ = monitor.join();
             CURRENT_CANCEL_FLAG.with(|f| *f.borrow_mut() = None);
-            let value = result.unwrap_or_else(error_result);
-            let _ = writeln!(stream, "{value}");
         });
     }
     Ok(())
@@ -4318,7 +4754,7 @@ fn serve(socket: &Path) -> R<()> {
 
 fn mcp(socket: &Path) -> R<()> {
     use mcp_cancel_registry::{Registry, RequestKey, RequestKind};
-    let output = Arc::new(Mutex::new(io::stdout()));
+    let output = Arc::new(Mutex::new(public_stdout()?));
     let stdin = io::stdin();
     let mut running = Vec::new();
     // One registry and lock per stdio connection. Nothing persists across a
@@ -4347,8 +4783,7 @@ fn mcp(socket: &Path) -> R<()> {
             Err(refusal) => {
                 let response = json!({"jsonrpc":"2.0","id":null,"error":{"code":refusal.code(),"message":refusal.message()}});
                 let mut stdout = output.lock().map_err(|_| "MCP output lock poisoned")?;
-                writeln!(*stdout, "{response}").map_err(|e| e.to_string())?;
-                stdout.flush().map_err(|e| e.to_string())?;
+                stdout.send(&response)?;
                 continue;
             }
         };
@@ -4365,6 +4800,7 @@ fn mcp(socket: &Path) -> R<()> {
                 // This closure is NEVER invoked for pre-canceled, duplicate or
                 // exhausted action IDs. Refusal is before thread/daemon contact.
                 thread::spawn(move || {
+                    let _delivery = ProxyDeliveryGuard::start();
                     let method = req["method"].as_str().unwrap_or("");
                     let result = match method {
                         "initialize" => Ok(json!({"protocolVersion":req["params"]["protocolVersion"].as_str().unwrap_or("2024-11-05"),"capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":"weasel-computer-use","version":"0.1.0"}})),
@@ -4388,8 +4824,7 @@ fn mcp(socket: &Path) -> R<()> {
                         Err(message) => json!({"jsonrpc":"2.0","id":worker_id,"error":{"code":-32603,"message":message}}),
                     };
                     if let Ok(mut stdout) = out.lock() {
-                        let _ = writeln!(*stdout, "{response}");
-                        let _ = stdout.flush();
+                        let _ = stdout.send(&response);
                     }
                 })
             });
@@ -4398,8 +4833,7 @@ fn mcp(socket: &Path) -> R<()> {
             Err(refusal) => {
                 let response = json!({"jsonrpc":"2.0","id":id,"error":{"code":refusal.code(),"message":refusal.message()}});
                 let mut stdout = output.lock().map_err(|_| "MCP output lock poisoned")?;
-                writeln!(*stdout, "{response}").map_err(|e| e.to_string())?;
-                stdout.flush().map_err(|e| e.to_string())?;
+                stdout.send(&response)?;
             }
         }
         running.retain(|h| !h.is_finished());
@@ -4433,12 +4867,13 @@ fn main() {
         "serve" => serve(&socket),
         "mcp" => mcp(&socket),
         "call" => {
+            let _delivery = ProxyDeliveryGuard::start();
             let tool = args.next().unwrap_or_default();
             let raw = args.next().unwrap_or_else(|| "{}".into());
             serde_json::from_str(&raw)
                 .map_err(|e| e.to_string())
                 .and_then(|value| daemon_call(&socket, &tool, &value))
-                .map(|v| println!("{v}"))
+                .and_then(|v| public_stdout()?.send(&v))
         }
         "--help" | "help" => {
             println!("weasel-computer-use-core serve | mcp | call TOOL JSON\nSocket: WEASEL_COMPUTER_USE_SOCKET or /run/user/UID/weasel-computer-use/desktop.sock\nDaemon has no model/API/credential access. One persistent physical desktop writer; explicit cancel/takeover.");
@@ -4484,6 +4919,8 @@ mod regression {
             capture_available: AtomicBool::new(false),
             capture_attempts: AtomicU64::new(0),
             capture_failure: Mutex::new(None),
+        observation_policy: observation_policy::Policy::default(),
+        indicator_phase_gate: Mutex::new(()),
             active: Mutex::new(Value::Null),
             task_scopes: Mutex::new(HashMap::new()),
             task_scope_ids: Mutex::new(HashSet::new()),
@@ -4585,6 +5022,8 @@ mod regression {
             capture_available: AtomicBool::new(false),
             capture_attempts: AtomicU64::new(0),
             capture_failure: Mutex::new(None),
+        observation_policy: observation_policy::Policy::default(),
+        indicator_phase_gate: Mutex::new(()),
             active: Mutex::new(Value::Null),
             task_scopes: Mutex::new(HashMap::new()),
             task_scope_ids: Mutex::new(HashSet::new()),
@@ -4636,6 +5075,9 @@ mod regression {
             "stalled stdin must remain cancelable"
         );
         let obs = Observation {
+            blind: false,
+            blind_task: None,
+            observation_generation: 1,
             id: "fixture".into(),
             at: Instant::now(),
             epoch: 2,
@@ -5101,7 +5543,8 @@ mod indicator_lifecycle_tests {
             result,
             json!({"schema":1,"lifecycle_revision":4,"complete":true,
             "session_id":state.session_id,"epoch":77,"takeover_latched":false,
-            "actor_active":false,"task_scope_active":false,"queued_batches":0,"actor_release_confirmed":true})
+            "actor_active":false,"task_scope_active":false,"queued_batches":0,"actor_release_confirmed":true,
+            "observation_mode":"enabled","observation_active":false,"observation_generation":1})
         );
         assert_eq!(state.input_policy.generation(), generation);
         assert_eq!(state.serial.load(Ordering::SeqCst), serial);
@@ -5249,6 +5692,8 @@ mod release_recovery_tests {
                 capture_available: AtomicBool::new(true),
                 capture_attempts: AtomicU64::new(0),
                 capture_failure: Mutex::new(None),
+        observation_policy: observation_policy::Policy::default(),
+        indicator_phase_gate: Mutex::new(()),
                 active: Mutex::new(Value::Null),
                 task_scopes: Mutex::new(HashMap::new()),
                 task_scope_ids: Mutex::new(HashSet::new()),
@@ -5270,6 +5715,9 @@ mod release_recovery_tests {
     }
     pub(super) fn obs(dir: &Path) -> Observation {
         Observation {
+            blind: false,
+            blind_task: None,
+            observation_generation: 1,
             id: "cloned-before-recovery".into(),
             at: Instant::now(),
             epoch: 77,
@@ -7910,7 +8358,7 @@ mod close_window_contract_tests {
         let calls = dir.join("fake-calls.txt");
         env::set_var("PATH", &shimdir);
         env::set_var("WEASEL_PRIVATE_CLOSE_CALLS", &calls);
-        let target = json!({"id":77,"pid":42,"app_id":"private-fixture-editor","title":"Saved own fixture","workspace_id":33,"is_focused":true,"is_floating":false,"layout":{"fixture":1}});
+        let target = json!({"id":77,"pid":42,"app_id":"private-fixture-editor","title":"Saved own fixture","workspace_id":33,"is_focused":true,"is_floating":false,"layout":{"pos_in_scrolling_layout":null,"tile_pos_in_workspace_view":[0.0,0.0],"tile_size":[800.0,600.0],"window_offset_in_tile":[0.0,0.0],"window_size":[800,600]}});
         let workspace = json!({"id":33,"output":"DP-6","is_active":true,"is_focused":true,"active_window_id":77});
         let geometry = json!({"x":0,"y":0,"width":800,"height":600,"scale":1});
         let mut captured = obs(&dir);
@@ -7950,7 +8398,7 @@ mod close_window_contract_tests {
                 }
                 "pid" => actual["pid"] = json!(999),
                 "app" => actual["app_id"] = json!("other-app"),
-                "layout" => actual["layout"] = json!({"fixture":2}),
+                "layout" => actual["layout"]["tile_size"] = json!([801.0,600.0]),
                 "title" => actual["title"] = json!("Other document"),
                 "output" => ws["output"] = json!("DP-5"),
                 "workspace_active" => ws["is_active"] = json!(false),

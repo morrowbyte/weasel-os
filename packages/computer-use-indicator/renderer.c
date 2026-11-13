@@ -24,7 +24,11 @@ static char *output_name, *task_id;
 static const char *activity = "Computer Use";
 static GtkWidget *activity_label;
 static GtkWidget *phase_label;
+static GtkWidget *privacy_label;
+static const char *observation_mode = "unknown";
+static gboolean observation_active;
 static gboolean phase_ack_pending;
+static gboolean phase_draw_complete, privacy_paint_pending;
 static unsigned long long phase_ack_transition;
 static char phase_ack_name[16];
 static gint64 last_heartbeat;
@@ -33,6 +37,27 @@ static gboolean target_valid = TRUE;
 static unsigned mapped;
 static char pending[MAX_LINE];
 static size_t pending_len;
+
+static void acknowledge_phase(void);
+
+static const char *phase_text(const char *name) {
+    if (!strcmp(name, "active")) return "Aktion läuft";
+    if (!strcmp(name, "observing")) return "Liest den Bildschirm";
+    if (!strcmp(name, "queued")) return "Aktion wartet";
+    if (!strcmp(name, "waiting")) return "Wartet";
+    return "Status wird geprüft";
+}
+
+static void update_privacy(void) {
+    if (!privacy_label) return;
+    const char *text = !strcmp(observation_mode, "disabled") ? "Blick aus" :
+        !strcmp(observation_mode, "enabled") ? (observation_active ? "Blick an · liest" : "Blick an") :
+        "Zugriff unbestätigt";
+    if (strcmp(gtk_label_get_text(GTK_LABEL(privacy_label)), text)) {
+        privacy_paint_pending = TRUE;
+        gtk_label_set_text(GTK_LABEL(privacy_label), text);
+    }
+}
 
 static void finish(const char *reason) {
     if (stopped) return;
@@ -81,13 +106,24 @@ static gboolean phase_painted(GtkWidget *widget, cairo_t *cr, gpointer unused) {
         phase_ack_pending = FALSE;
         return FALSE;
     }
-    const char *expected_text = !strcmp(phase_ack_name, "active") ? "Aktion läuft" :
-        !strcmp(phase_ack_name, "unknown") ? "Status wird geprüft" :
-        !strcmp(phase_ack_name, "queued") ? "Aktion wartet" : "Wartet · zuletzt frei";
+    const char *expected_text = phase_text(phase_ack_name);
     if (strcmp(gtk_label_get_text(GTK_LABEL(widget)), expected_text)) return FALSE;
+    phase_draw_complete = TRUE;
+    acknowledge_phase();
+    return FALSE;
+}
+
+static void acknowledge_phase(void) {
+    if (!phase_ack_pending || !phase_draw_complete || privacy_paint_pending || stopped) return;
     phase_ack_pending = FALSE;
     printf("{\"revision\":1,\"event\":\"phase_applied\",\"task_id\":\"%s\",\"phase\":\"%s\",\"transition\":%llu}\n", task_id, phase_ack_name, phase_ack_transition);
     fflush(stdout);
+}
+
+static gboolean privacy_painted(GtkWidget *widget, cairo_t *cr, gpointer unused) {
+    (void)widget; (void)cr; (void)unused;
+    privacy_paint_pending = FALSE;
+    acknowledge_phase();
     return FALSE;
 }
 
@@ -125,10 +161,14 @@ static GtkWidget *surface(int width, int height, gboolean left, gboolean right,
         gtk_label_set_width_chars(GTK_LABEL(text), 30);
         gtk_label_set_max_width_chars(GTK_LABEL(text), 55);
         gtk_label_set_xalign(GTK_LABEL(text), 0.0f);
+        privacy_label = gtk_label_new(NULL);
+        g_signal_connect_after(privacy_label, "draw", G_CALLBACK(privacy_painted), NULL);
+        update_privacy();
         GtkWidget *shortcut = gtk_label_new("Alt + Esc  ·  Abbrechen");
         gtk_widget_set_name(shortcut, "abort-shortcut");
         gtk_widget_set_can_focus(text, FALSE);
         gtk_box_pack_start(GTK_BOX(box), phase_label, FALSE, FALSE, 0);
+        gtk_box_pack_start(GTK_BOX(box), privacy_label, FALSE, FALSE, 0);
         gtk_box_pack_start(GTK_BOX(box), text, TRUE, TRUE, 0);
         gtk_box_pack_end(GTK_BOX(box), shortcut, FALSE, FALSE, 0);
         gtk_container_add(GTK_CONTAINER(window), box);
@@ -154,18 +194,31 @@ static void process_line(const char *line) {
         char extra;
         int fields = sscanf(value, "%15s %llu %c", name, &transition, &extra);
         phase_ack_pending = FALSE;
+        phase_draw_complete = FALSE;
         if (fields != 1 && fields != 2) { finish("invalid_phase"); return; }
-        if (!strcmp(name, "unknown")) gtk_label_set_text(GTK_LABEL(phase_label), "Status wird geprüft");
-        else if (!strcmp(name, "active")) gtk_label_set_text(GTK_LABEL(phase_label), "Aktion läuft");
-        else if (!strcmp(name, "queued")) gtk_label_set_text(GTK_LABEL(phase_label), "Aktion wartet");
-        else if (!strcmp(name, "waiting")) gtk_label_set_text(GTK_LABEL(phase_label), "Wartet · zuletzt frei");
-        else finish("invalid_phase");
+        if (strcmp(name, "unknown") && strcmp(name, "active") && strcmp(name, "observing") &&
+            strcmp(name, "queued") && strcmp(name, "waiting")) finish("invalid_phase");
+        else {
+            gtk_label_set_text(GTK_LABEL(phase_label), phase_text(name));
+        }
         if (!stopped && fields == 2) {
             phase_ack_transition = transition;
             snprintf(phase_ack_name, sizeof phase_ack_name, "%s", name);
             phase_ack_pending = TRUE;
             gtk_widget_queue_draw(phase_label);
         }
+    } else if (!strncmp(line, "v1 observation ", 15)) {
+        char mode[16], state[16], extra;
+        if (sscanf(line + 15, "%15s %15s %c", mode, state, &extra) != 2 ||
+            (strcmp(mode, "enabled") && strcmp(mode, "disabled") && strcmp(mode, "unknown")) ||
+            (strcmp(state, "active") && strcmp(state, "idle")) ||
+            (!strcmp(state, "active") && strcmp(mode, "enabled"))) {
+            finish("invalid_observation");
+            return;
+        }
+        observation_mode = !strcmp(mode, "enabled") ? "enabled" : !strcmp(mode, "disabled") ? "disabled" : "unknown";
+        observation_active = !strcmp(state, "active");
+        update_privacy();
     } else if (!strncmp(line, "v1 activity ", 12) && begun) {
         const char *value = line + 12;
         if (!*value || !g_utf8_validate(value, -1, NULL) || g_utf8_strlen(value, -1) > 120) {
