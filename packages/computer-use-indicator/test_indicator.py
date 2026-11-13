@@ -42,6 +42,7 @@ class StatusDeadline(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(indicator.CapabilityError):
                 indicator.observation_state(value)
 
+
     @unittest.skipUnless(os.environ.get("WEASEL_FRAME_TEST") == "1", "requires isolated GTK display")
     def test_renderer_ack_follows_real_gtk_draw_and_invalidates_old_transitions(self):
         source = r'''
@@ -62,8 +63,12 @@ int main(void) {
     surfaces[4] = window;
     island_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
     phase_label = gtk_label_new("Status wird geprüft");
+    privacy_label = gtk_label_new(NULL);
+    update_privacy();
     gtk_box_pack_start(GTK_BOX(island_box), phase_label, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(island_box), privacy_label, FALSE, FALSE, 0);
     gtk_container_add(GTK_CONTAINER(window), island_box);
+    gulong privacy_handler = g_signal_connect_after(privacy_label, "draw", G_CALLBACK(privacy_painted), NULL);
     g_signal_connect_after(phase_label, "draw", G_CALLBACK(phase_painted), NULL);
     gtk_widget_show_all(window);
     task_id = "frame-test";
@@ -85,6 +90,35 @@ int main(void) {
         g_usleep(1000);
     }
     assert(!phase_ack_pending); /* actual GtkLabel draw handler ran */
+    process_line("v1 observation disabled idle");
+    process_line("v1 phase waiting 45");
+    assert(privacy_paint_pending && phase_ack_pending);
+    deadline = g_get_monotonic_time() + G_USEC_PER_SEC;
+    while (phase_ack_pending && g_get_monotonic_time() < deadline) {
+        g_main_context_iteration(NULL, FALSE);
+        g_usleep(1000);
+    }
+    assert(!phase_ack_pending && !privacy_paint_pending);
+    assert(!strcmp(gtk_label_get_text(GTK_LABEL(privacy_label)), "Blick aus"));
+    g_signal_handler_block(privacy_label, privacy_handler);
+    process_line("v1 observation enabled idle");
+    process_line("v1 phase observing 46");
+    deadline = g_get_monotonic_time() + G_USEC_PER_SEC;
+    while (!phase_draw_complete && g_get_monotonic_time() < deadline) {
+        g_main_context_iteration(NULL, FALSE);
+        g_usleep(1000);
+    }
+    assert(phase_draw_complete && privacy_paint_pending && phase_ack_pending);
+    g_signal_handler_unblock(privacy_label, privacy_handler);
+    gtk_widget_queue_draw(privacy_label);
+    deadline = g_get_monotonic_time() + G_USEC_PER_SEC;
+    while (phase_ack_pending && g_get_monotonic_time() < deadline) {
+        g_main_context_iteration(NULL, FALSE);
+        g_usleep(1000);
+    }
+    assert(!phase_ack_pending && !privacy_paint_pending);
+    assert(!strcmp(gtk_label_get_text(GTK_LABEL(phase_label)), "Liest den Bildschirm"));
+    assert(!strcmp(gtk_label_get_text(GTK_LABEL(privacy_label)), "Blick an"));
     last_heartbeat = g_get_monotonic_time() - LEASE_US - 1;
     process_line("v1 phase active 43");
     deadline = g_get_monotonic_time() + 100000;
@@ -116,7 +150,7 @@ int main(void) {
             run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=5, check=True)
             events = [json.loads(line) for line in run.stdout.splitlines()]
             acknowledgements = [event for event in events if event.get("event") == "phase_applied"]
-            self.assertEqual([(event["phase"], event["transition"]) for event in acknowledgements], [("active", 42)])
+            self.assertEqual([(event["phase"], event["transition"]) for event in acknowledgements], [("active", 42), ("waiting", 45), ("observing", 46)])
 
     def test_fragmented_response_has_total_deadline(self):
         reader, writer = socket.socketpair()
@@ -377,6 +411,7 @@ class IndicatorLifecycle(unittest.TestCase):
         self.assertEqual(self.end_control().returncode, 0)
         process.wait(timeout=2)
 
+
     def test_phase_tracks_actor_and_queue_without_ending_scope(self):
         process = self.launch()
         self.ready(process)
@@ -412,7 +447,7 @@ class IndicatorLifecycle(unittest.TestCase):
         process.wait(timeout=2)
 
     def phase_request(self, transition, phase="active", **overrides):
-        begin = next(item["arguments"] for item in self.actor_events if item["arguments"].get("event") == "begin")
+        begin = next(item["arguments"] for item in reversed(self.actor_events) if item["arguments"].get("event") == "begin")
         request = {"revision": 1, "event": "phase", "task_id": "fixture-task",
                    "session_id": "fixture-session", "epoch": 2,
                    "scope_token": begin["scope_token"], "transition": transition, "phase": phase,
@@ -443,6 +478,7 @@ class IndicatorLifecycle(unittest.TestCase):
         self.assertEqual(self.end_control().returncode, 0)
         process.wait(timeout=2)
 
+
     def test_bound_phase_ack_precedes_short_action_and_release(self):
         process = self.launch()
         self.ready(process)
@@ -470,10 +506,21 @@ class IndicatorLifecycle(unittest.TestCase):
                 self.env["FIXTURE_PHASE_MODE"] = mode
                 process = self.launch()
                 self.ready(process)
-                self.assertFalse(self.phase_request(200)["ok"])
-                self.assertEqual(self.end_control().returncode, 0)
-                process.wait(timeout=2)
-                self.renderer_log.unlink(missing_ok=True)
+                try:
+                    self.assertFalse(self.phase_request(200, "observing")["ok"])
+                    deadline = time.monotonic() + 2
+                    while time.monotonic() < deadline:
+                        lines = [item["line"] for item in self.protocol()]
+                        start = lines.index("v1 phase observing 200")
+                        if "v1 phase waiting" in lines[start + 1:]:
+                            break
+                        time.sleep(0.01)
+                    else:
+                        self.fail("rejected observation phase did not return to confirmed idle")
+                finally:
+                    self.assertEqual(self.end_control().returncode, 0)
+                    process.wait(timeout=2)
+                    self.renderer_log.unlink(missing_ok=True)
 
     def launch(self, task="fixture-task", extra=()):
         process = subprocess.Popen(

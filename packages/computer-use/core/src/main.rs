@@ -213,6 +213,7 @@ struct State {
     capture_attempts: AtomicU64,
     capture_failure: Mutex<Option<String>>,
     observation_policy: observation_policy::Policy,
+    indicator_phase_gate: Mutex<()>,
     active: Mutex<Value>,
     // One explicit Computer Use task owns this scope across model-thinking gaps.
     // The task indicator registers it and removes it on every normal shutdown;
@@ -456,13 +457,19 @@ fn observation_fields(state: &State, data: &mut Value) {
 struct ObservationAcquisition<'a> {
     acquisition: Option<observation_policy::Acquisition<'a>>,
     state: &'a State,
-    phase: Option<(String, u64, &'static str)>,
+    phase: Option<(String, u64)>,
 }
 impl Drop for ObservationAcquisition<'_> {
     fn drop(&mut self) {
+        let Ok(_phase) = self.state.indicator_phase_gate.lock() else {
+            self.acquisition.take();
+            return;
+        };
         self.acquisition.take();
-        if let Some((task, epoch, previous)) = &self.phase {
-            let _ = indicator_phase(self.state, task, *epoch, previous);
+        if let Some((task, epoch)) = &self.phase {
+            if let Ok(phase) = current_indicator_phase(self.state) {
+                let _ = indicator_phase_unlocked(self.state, task, *epoch, phase);
+            }
         }
     }
 }
@@ -472,15 +479,18 @@ fn begin_acquisition(state: &State) -> R<ObservationAcquisition<'_>> {
     let scope = state.task_scopes.lock().map_err(|_| "Task scopes poisoned")?
         .iter().find(|(_, scope)| scope.epoch == epoch && scope.is_live() && scope.indicator_socket.is_some())
         .map(|(id, _)| id.clone());
-    let previous = if state.active.lock().map_err(|_| "Active state poisoned")?.is_null() { "release" } else { "active" };
-    if let Some(task) = &scope {
-        // This is a synchronous paint ACK before the first content read.
-        indicator_phase(state, task, epoch, "observing")?;
+    let mut guard = ObservationAcquisition {
+        acquisition: None, state, phase: scope.map(|task| (task, epoch)),
+    };
+    {
+        let _phase = state.indicator_phase_gate.lock().map_err(|_| "Indicator phase gate poisoned")?;
+        if let Some((task, _)) = &guard.phase {
+            // A failed paint barrier must also roll back the attempted phase.
+            indicator_phase_unlocked(state, task, epoch, "observing")?;
+        }
+        guard.acquisition = Some(state.observation_policy.acquiring()?);
     }
-    Ok(ObservationAcquisition {
-        acquisition: Some(state.observation_policy.acquiring()?), state,
-        phase: scope.map(|task| (task, epoch, previous)),
-    })
+    Ok(guard)
 }
 
 #[derive(Deserialize)]
@@ -710,6 +720,23 @@ fn action_scope_still_live(state: &State, task_id: &str) -> bool {
 // dispatch. Never hold task_scope_gate while waiting: physical Escape fences
 // this request through the epoch independently.
 fn indicator_phase(state: &State, task_id: &str, epoch: u64, phase: &str) -> R<()> {
+    let _phase = state.indicator_phase_gate.lock().map_err(|_| "Indicator phase gate poisoned")?;
+    let phase = if phase == "release" { current_indicator_phase(state)? } else { phase };
+    indicator_phase_unlocked(state, task_id, epoch, phase)
+}
+
+fn current_indicator_phase(state: &State) -> R<&'static str> {
+    if state.observation_policy.active() {
+        Ok("observing")
+    } else if !state.active.lock().map_err(|_| "Active state poisoned")?.is_null()
+        || !state.release_confirmed.load(Ordering::SeqCst) {
+        Ok("active")
+    } else {
+        Ok("release")
+    }
+}
+
+fn indicator_phase_unlocked(state: &State, task_id: &str, epoch: u64, phase: &str) -> R<()> {
     let scope = state.task_scopes.lock().map_err(|_| "Task scopes poisoned")?
         .get(task_id).cloned().ok_or("Indicator scope unavailable")?;
     let path = scope.indicator_socket.as_ref().ok_or("Indicator lacks synchronous phase support")?;
@@ -4624,6 +4651,7 @@ fn serve(socket: &Path) -> R<()> {
         capture_attempts: AtomicU64::new(0),
         capture_failure: Mutex::new(None),
         observation_policy: observation_policy::Policy::default(),
+        indicator_phase_gate: Mutex::new(()),
         active: Mutex::new(Value::Null),
         task_scopes: Mutex::new(HashMap::new()),
         task_scope_ids: Mutex::new(HashSet::new()),
@@ -4895,6 +4923,7 @@ mod regression {
             capture_attempts: AtomicU64::new(0),
             capture_failure: Mutex::new(None),
         observation_policy: observation_policy::Policy::default(),
+        indicator_phase_gate: Mutex::new(()),
             active: Mutex::new(Value::Null),
             task_scopes: Mutex::new(HashMap::new()),
             task_scope_ids: Mutex::new(HashSet::new()),
@@ -4997,6 +5026,7 @@ mod regression {
             capture_attempts: AtomicU64::new(0),
             capture_failure: Mutex::new(None),
         observation_policy: observation_policy::Policy::default(),
+        indicator_phase_gate: Mutex::new(()),
             active: Mutex::new(Value::Null),
             task_scopes: Mutex::new(HashMap::new()),
             task_scope_ids: Mutex::new(HashSet::new()),
@@ -5666,6 +5696,7 @@ mod release_recovery_tests {
                 capture_attempts: AtomicU64::new(0),
                 capture_failure: Mutex::new(None),
         observation_policy: observation_policy::Policy::default(),
+        indicator_phase_gate: Mutex::new(()),
                 active: Mutex::new(Value::Null),
                 task_scopes: Mutex::new(HashMap::new()),
                 task_scope_ids: Mutex::new(HashSet::new()),

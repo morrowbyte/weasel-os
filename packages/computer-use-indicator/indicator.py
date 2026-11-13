@@ -575,6 +575,9 @@ def run(args):
                                     if applied and requested_phase == "release":
                                         phase_busy = False
                                         phase = None
+                                    if not applied:
+                                        phase_busy = False
+                                        phase = None
                                     if applied:
                                         emit("phase_applied", task_id=args.task_id, phase=requested_phase, transition=transition)
                                 client.sendall(json.dumps({"ok": applied, "task_id": args.task_id,

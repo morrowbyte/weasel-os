@@ -327,3 +327,71 @@ fn realistic_three_action_batch_saves_two_socket_roundtrips() {
     drop(state);
     fs::remove_dir_all(dir).unwrap();
 }
+
+fn acquisition_phase_fixture(label: &str, reject_first: bool) -> (Arc<State>, PathBuf, thread::JoinHandle<Vec<String>>) {
+    let (state, dir) = cooperative_fixture(label);
+    let path = dir.join("phase.sock");
+    let listener = UnixListener::bind(&path).unwrap();
+    let raw = fs::read_to_string("/proc/self/stat").unwrap();
+    let start_ticks = raw.rsplit_once(") ").unwrap().1.split_whitespace().nth(19).unwrap().parse().unwrap();
+    let owner = ScopeProcess { pid: std::process::id(), start_ticks };
+    state.task_scopes.lock().unwrap().insert("acquisition-test".into(), TaskScope {
+        expires: Instant::now() + Duration::from_secs(60),
+        owner_processes: Some([owner.clone(), owner]), epoch: 77,
+        scope_token: Some("owned".into()), indicator_socket: Some(path),
+    });
+    let worker = thread::spawn(move || {
+        let mut phases = Vec::new();
+        loop {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap()).read_line(&mut line).unwrap();
+            if line == "stop\n" { break; }
+            let request: Value = serde_json::from_str(&line).unwrap();
+            phases.push(request["phase"].as_str().unwrap().to_owned());
+            let reply = json!({"ok":!(reject_first && phases.len() == 1),
+                "task_id":request["task_id"],"session_id":request["session_id"],
+                "epoch":request["epoch"],"transition":request["transition"],"phase":request["phase"]});
+            writeln!(stream,"{reply}").unwrap();
+        }
+        phases
+    });
+    (state, dir, worker)
+}
+fn acquisition_phase_finish(dir: PathBuf, worker: thread::JoinHandle<Vec<String>>) -> Vec<String> {
+    UnixStream::connect(dir.join("phase.sock")).unwrap().write_all(b"stop\n").unwrap();
+    let phases = worker.join().unwrap();
+    fs::remove_dir_all(dir).unwrap();
+    phases
+}
+
+#[test]
+fn acquisition_phase_failed_start_restores_confirmed_idle() {
+    let (state, dir, worker) = acquisition_phase_fixture("privacy-phase-rejected", true);
+    assert!(begin_acquisition(&state).is_err());
+    assert!(!state.observation_policy.active());
+    assert_eq!(state.capture_attempts.load(Ordering::SeqCst), 0);
+    let phases = acquisition_phase_finish(dir, worker);
+    assert_eq!(phases, ["observing", "release"]);
+}
+
+#[test]
+fn acquisition_phase_end_uses_current_release_and_other_reads() {
+    for other_read in [false, true] {
+        let (state, dir, worker) = acquisition_phase_fixture("privacy-phase-release", false);
+        *state.active.lock().unwrap() = json!({"task_id":"acquisition-test"});
+        state.release_confirmed.store(false, Ordering::SeqCst);
+        let first = begin_acquisition(&state).unwrap();
+        let other = if other_read { Some(begin_acquisition(&state).unwrap()) } else { None };
+        *state.active.lock().unwrap() = Value::Null;
+        state.release_confirmed.store(true, Ordering::SeqCst);
+        indicator_phase(&state, "acquisition-test", 77, "release").unwrap();
+        drop(first);
+        assert_eq!(state.observation_policy.active(), other_read);
+        drop(other);
+        let phases = acquisition_phase_finish(dir, worker);
+        assert_eq!(phases, if other_read {
+            vec!["observing", "observing", "observing", "observing", "release"]
+        } else { vec!["observing", "observing", "release"] });
+    }
+}
