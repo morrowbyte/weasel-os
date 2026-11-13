@@ -42,6 +42,37 @@ class LifecycleTimeout(CapabilityError):
     pass
 
 
+class RendererEvents:
+    """One nonblocking reader shared by normal dispatch and paint barriers."""
+    def __init__(self, stream):
+        self.fd = stream.fileno()
+        os.set_blocking(self.fd, False)
+        self.pending = bytearray()
+
+    def read(self):
+        events = []
+        for _ in range(16):
+            try:
+                chunk = os.read(self.fd, 4096)
+            except BlockingIOError:
+                break
+            if not chunk:
+                raise CapabilityError("renderer pipe closed")
+            self.pending.extend(chunk)
+            while b"\n" in self.pending:
+                line, _, tail = self.pending.partition(b"\n")
+                self.pending[:] = tail
+                if len(line) > 4096:
+                    raise CapabilityError("renderer event exceeds bounded size")
+                event = json.loads(line)
+                if not isinstance(event, dict):
+                    raise CapabilityError("renderer event malformed")
+                events.append(event)
+            if len(self.pending) > 4096:
+                raise CapabilityError("renderer event exceeds bounded size")
+        return events
+
+
 def emit(event, **fields):
     print(json.dumps({"revision": REVISION, "event": event, "monotonic": time.monotonic(), **fields}, ensure_ascii=False), flush=True)
 
@@ -120,6 +151,7 @@ def parse_lifecycle(result):
         raise CapabilityError("actor lifecycle counters unavailable")
     if any(type(status.get(key)) is not bool for key in ("takeover_latched", "actor_active", "actor_release_confirmed", "task_scope_active")):
         raise CapabilityError("actor lifecycle cancellation/release unavailable")
+    observation_state(status)
     return status
 
 
@@ -284,11 +316,39 @@ def valid_activity(value):
 
 
 def activity_phase(status):
+    if status.get("observation_active") is True:
+        return "observing"
     if status["actor_active"]:
         return "active"
     if status["queued_batches"]:
         return "queued"
     return "waiting"
+
+
+def observation_state(status):
+    mode = status.get("observation_mode", "unknown")
+    active = status.get("observation_active", False)
+    if mode not in ("enabled", "disabled", "unknown") or type(active) is not bool:
+        raise CapabilityError("actor observation policy malformed")
+    if active and mode != "enabled":
+        raise CapabilityError("actor observation policy contradicts active read")
+    if ("observation_mode" in status) != ("observation_active" in status):
+        raise CapabilityError("actor observation policy incomplete")
+    return mode, active
+
+
+def observation_generation(status):
+    generation = status.get("observation_generation", -1)
+    if type(generation) is not int or generation < -1:
+        raise CapabilityError("actor observation generation malformed")
+    return generation
+
+
+def render_observation(renderer, status):
+    mode, active = observation_state(status)
+    renderer.stdin.write(f"v1 observation {mode} {'active' if active else 'idle'}\n")
+    renderer.stdin.flush()
+    return mode, active
 
 
 def control(args):
@@ -371,6 +431,7 @@ def run(args):
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True, bufsize=1, env=graphical_env,
         )
+        renderer_events = RendererEvents(renderer.stdout)
         selector.register(renderer.stdout, selectors.EVENT_READ, "renderer")
         if args.stdin_control:
             os.set_blocking(sys.stdin.fileno(), False)
@@ -386,6 +447,8 @@ def run(args):
         ], task_socket)
         if registered.get("task_scope_lifetime") != "owner_process":
             raise CapabilityError("actor does not support owner-bound task scope lifetime")
+        privacy = render_observation(renderer, registered)
+        privacy_generation = observation_generation(registered)
         renderer.stdin.write("v1 begin\n")
         renderer.stdin.flush()
         emit("starting", task_id=args.task_id, output=args.output, pid=os.getpid(), geometry=geometry)
@@ -440,46 +503,51 @@ def run(args):
                             if event == "phase":
                                 transition = request.get("transition")
                                 requested_phase = request.get("phase")
+                                request_mode = request.get("observation_mode", "unknown")
+                                request_generation = observation_generation(request)
                                 valid = (valid and ready and request.get("session_id") == initial["session_id"]
                                          and request.get("epoch") == initial["epoch"]
                                          and request.get("scope_token") == scope_token
                                          and type(transition) is int and transition > last_transition
-                                         and requested_phase in ("active", "release"))
+                                         and requested_phase in ("active", "observing", "release")
+                                         and request_mode in ("enabled", "disabled", "unknown")
+                                         and request_generation >= privacy_generation
+                                         and (requested_phase != "observing" or request_mode == "enabled"))
                                 applied = False
                                 if valid:
                                     last_transition = transition
-                                    if requested_phase == "active":
+                                    # This barrier clears an older private label before any
+                                    # observing ACK; stale pending poll replies cannot undo it.
+                                    privacy_generation = request_generation
+                                    privacy = render_observation(renderer, {
+                                        "observation_mode": request_mode, "observation_active": False})
+                                    if requested_phase in ("active", "observing"):
                                         phase_busy = True
-                                    render_phase = "active" if requested_phase == "active" else "unknown"
+                                    # Release is confirmed idle, not a failed status read.
+                                    render_phase = requested_phase if requested_phase != "release" else "waiting"
                                     renderer.stdin.write(f"v1 phase {render_phase} {transition}\n")
                                     renderer.stdin.flush()
                                     until = time.monotonic() + STATUS_TIMEOUT_SECONDS
-                                    pending_ack = bytearray()
                                     while time.monotonic() < until:
                                         if stop_signal[0] is not None:
                                             break
                                         if not select.select([renderer.stdout], [], [], min(0.01, max(0, until - time.monotonic())))[0]:
                                             continue
-                                        chunk = os.read(renderer.stdout.fileno(), 4096)
-                                        if not chunk:
-                                            break
-                                        pending_ack.extend(chunk)
-                                        if len(pending_ack) > 4096:
-                                            break
-                                        while b"\n" in pending_ack:
-                                            line, _, tail = pending_ack.partition(b"\n")
-                                            pending_ack[:] = tail
-                                            rendered = json.loads(line)
+                                        for rendered in renderer_events.read():
                                             if (rendered.get("revision") == REVISION and rendered.get("event") == "phase_applied"
                                                 and rendered.get("task_id") == args.task_id and rendered.get("phase") == render_phase
                                                 and rendered.get("transition") == transition):
                                                 applied = True
-                                                break
                                         if applied:
                                             break
                                     if applied and requested_phase == "release":
                                         phase_busy = False
                                         phase = None
+                                    if not applied:
+                                        phase_busy = False
+                                        phase = None
+                                    if applied:
+                                        emit("phase_applied", task_id=args.task_id, phase=requested_phase, transition=transition)
                                 client.sendall(json.dumps({"ok": applied, "task_id": args.task_id,
                                     "session_id": initial["session_id"], "epoch": initial["epoch"],
                                     "transition": transition, "phase": requested_phase}).encode() + b"\n")
@@ -505,20 +573,15 @@ def run(args):
                     except (OSError, ValueError, CapabilityError) as error:
                         probe_error = error
                 elif key.data == "renderer":
-                    line = renderer.stdout.readline()
-                    if not line or len(line) > 4096:
-                        reason = "renderer_pipe_closed"
-                        stop_signal[0] = 0
-                        continue
-                    event = json.loads(line)
-                    if event.get("revision") == REVISION and event.get("event") == "ready":
-                        if event.get("task_id") != args.task_id or event.get("output") != args.output:
-                            raise CapabilityError("renderer identity differs from owned task")
-                        ready = True
-                        emit("ready", task_id=args.task_id, output=args.output, surfaces=event.get("surfaces"), geometry=geometry)
-                    elif event.get("event") == "ended":
-                        reason = "renderer_" + str(event.get("reason", "ended"))
-                        stop_signal[0] = 0
+                    for event in renderer_events.read():
+                        if event.get("revision") == REVISION and event.get("event") == "ready":
+                            if event.get("task_id") != args.task_id or event.get("output") != args.output:
+                                raise CapabilityError("renderer identity differs from owned task")
+                            ready = True
+                            emit("ready", task_id=args.task_id, output=args.output, surfaces=event.get("surfaces"), geometry=geometry)
+                        elif event.get("event") == "ended":
+                            reason = "renderer_" + str(event.get("reason", "ended"))
+                            stop_signal[0] = 0
                 elif key.data == "stdin":
                     chunk = os.read(sys.stdin.fileno(), 4096)
                     if not chunk:
@@ -560,6 +623,7 @@ def run(args):
                     renderer.stdin.write("v1 phase unknown\n")
                     renderer.stdin.flush()
                     phase = None
+                privacy = render_observation(renderer, {})
                 if isinstance(probe_error, LifecycleTimeout) and timeout_retry == 0:
                     timeout_retry = 1
                     next_poll = now
@@ -575,6 +639,10 @@ def run(args):
                 last_valid_at = now
                 timeout_retry = 0
                 next_poll = now + POLL_SECONDS
+                if observation_generation(fresh_status) >= privacy_generation:
+                    privacy_generation = observation_generation(fresh_status)
+                    if observation_state(fresh_status) != privacy:
+                        privacy = render_observation(renderer, fresh_status)
                 new_phase = activity_phase(fresh_status)
                 if not phase_busy and new_phase != phase:
                     renderer.stdin.write("v1 phase " + new_phase + "\n")
