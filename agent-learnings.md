@@ -1663,3 +1663,10 @@ Ein fester, beim Start wirklich decodierter Built-in-Katalog meldet zunächst nu
 Nur der parallel ergänzte Lernlog kollidierte mit Main42a43c3; alle Einträge beider Seiten sind erhalten. Native-/CU-/Niri- und Workflow-Dateien bleiben bytegleich zu99fb995. Der geerbte Updatebatch bleibt unverändert. Auf der bestehenden Boat bestanden `nixfmt --check flake.nix` und beide Host-drvPath-Evaluationen mit `--no-write-lock-file`; der tatsächlich gewählte Indicator-DRV und sein Output sind identisch zum bereits qualifizierten sudo-Paket. Bestehende Paket-/Runtimebelege deshalb wiederverwenden, neue normale CI separat verfolgen. Keine lokale Prüfung, Paket-/Hostbuildrunde oder GUI.
 
 - 2026-11-13: Merged Main privacy fix into desktop-pet branch, preserving current-state phase serialization, failed-paint recovery, four-action/one-pointer batches and pet presentation. Resolved overlapping GTK fixture setup and retained both acquisition regressions plus the RPC comparison. Boat: both host drvPath evaluations, exact Actor/Indicator derivation builds (194 Core + 4 Pointer), and two targeted GTK paint/ACK tests passed; lockfile unchanged. No laptop tests or activation.
+
+### 2026-11-13 — batch candidate 20261113T112253Z-7fb22769
+
+- Updated existing configured sources: flake.lock, packages/chatgpt/default.nix, packages/netbird-bin.nix, packages/netbird-ui-bin.nix, packages/t3code/source.json, packages/xdg-desktop-portal-luminous.nix.
+- Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
+
+- 2026-11-13: Reconciled the next Main batch in the desktop-pet branch by retaining both learning-log additions. Native/CU/Niri/CI source is unchanged from 8417f22. Boat host drvPath evaluations passed with the inherited lockfile unchanged; both selected package derivations/outputs equal the already qualified 8417f22 packages, so no package/GUI test repetition. A partial managed source transfer was repaired for four files and all 68 relevant source hashes verified before evaluation.
