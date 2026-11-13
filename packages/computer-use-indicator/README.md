@@ -1,30 +1,118 @@
-# Task-owned Computer Use monitor indicator
+# Desktop pet and task-owned Computer Use indicator
 
-This is presentation beside the Rust desktop actor. A small C/GTK3 renderer uses
-the already available GTK layer-shell library; it contains no screenshot,
-accessibility, focus, input, model, API or credential code. The Python standard
-library helper owns its lifetime and reads actor status. GTK is isolated here so
-the Rust capture/input core does not gain a GTK dependency or another Cargo tree.
+The native companion is an animated Wayland desktop pet, not a text status island.
+A small C/GTK3 renderer uses GTK layer-shell. Its body is pointer-through, its
+separate speech bubble accepts only its explicit buttons, and neither surface
+requests keyboard focus or reserves workspace. It never captures the desktop.
+The Python helper keeps the existing Actor task, release, Stop and paint fences.
 
-The indicator has four solid blue 4-logical-pixel edge surfaces and a compact top
-label: a concise current activity and **Alt + Esc · Abbrechen**. All five surfaces request the overlay
-layer, explicitly disable keyboard focus, use empty input regions, and reserve no
-workspace. They target one explicitly selected output, including full-screen
-windows. The intended live target on this laptop is `DP-6`; the user's T3 monitor
-is not automatically selected.
+The warm speech bubble is at most 280 logical pixels wide, with three visible
+lines and a curved tail toward the pet. Its message and arrow open the original
+thread; the separate X only dismisses the reminder. There is no toolbar/header
+or visible action text. A question or unanswered shield marks pending input;
+only a result uses a check. The exact `Thread N · Question: ` / `Result: ` prefix
+is omitted from the visible preview, while the complete original remains in
+the tooltip and accessible description. Unknown prefixes are displayed as sent.
+Compact native eye state and the existing Alt+Esc keyboard hint remain separate
+from the message. The keyboard hint is not a clickable Stop control.
 
-The label reports active, queued, or waiting. Before a scoped actor dispatch,
-the helper must receive a matching renderer acknowledgement for the active
-transition after the mapped GTK label's draw handler has painted it. This is
-GTK paint evidence, not proof of physical compositor presentation. The actor
-binds it to its session, task, epoch and transition; a
-timeout or mismatch prevents dispatch. The helper keeps the active phase until
-the actor confirms release, then returns to sampled lifecycle status. The actor
-still validates human input and all other action guards.
+Computer Use shows the pet for the task lifetime, including when Crew's persistent
+pet setting is off. Crew can separately start `weasel-desktop-pet --stdio` for an
+opt-in persistent companion; that preference defaults to off. A private same-user
+socket transfers only the bounded Crew event projection to a task-owned pet.
+The persistent renderer is hidden while the task renderer is attached, avoiding
+two pets. The feed cannot set observation policy, phase, visibility or task leases.
+After the task ends, a selected persistent pet returns. Losing Crew clears its
+notifications without stopping or authorizing Computer Use.
 
-This implementation needs live Niri validation. Successful compilation, fixture
-tests and the renderer's `ready` event do not prove visible edges, click-through,
-correct physical output, full-screen stacking, or the real T3 Stop lifecycle.
+The pet follows Niri's focused output using structural `focused-output`/`outputs`
+queries, including while observation is disabled. Presentation movement does not
+change the action target, geometry guard, task identity, epoch or Stop behavior.
+No window inventory, title, pixels or accessibility tree is read for this purpose.
+If a focus query fails, the pet stays on its last confirmed monitor and retries
+after 500 ms. Only fixed diagnostic codes are logged. This presentation retry
+does not end the Computer Use task; the independent target-output geometry,
+monitor-loss, Actor lifecycle and paint-acknowledgement guards remain in force.
+
+The visual states distinguish permission from acquisition: covered eyes mean
+confirmed observation disabled; reading eyes indicate acquisition preparation or
+an actual read; unconfirmed policy also covers both eyes, with a question badge. No
+privacy claim is inferred from Crew arguments or old chat results. A custom pack
+cannot replace the renderer-controlled disabled/unknown gesture. The body does
+not use privacy status text; accessible names describe each state. Alt + Esc
+remains visible during Computer Use. Thinking dots represent real ongoing work,
+not private model reasoning. A safe authored activity remains available through
+the existing `activity` command and accessibility name, without echoing input.
+
+Before capture or scoped input the Actor still requires the matching transition
+ACK after the mapped pet has painted its current phase and privacy pose. This
+attests GTK drawing, not physical compositor presentation. Native target checks
+retain their structural path and do not add per-action paint transitions. Animation
+runs in bounded four-frame bursts and then settles; heartbeats never redraw.
+Reduced motion settles immediately. There is no permanent idle GPU animation.
+
+## Crew JSONL v1
+
+Crew spawns `weasel-desktop-pet --stdio` without a shell. Each line is at most
+16 KiB. `configure` accepts `persistent`, `visible`, `reducedMotion` and a local
+`petPath` or null. Optional `preferredSpecies` is null or one of the twelve fixed
+IDs: weasel, dog, cat, fox, otter, raccoon, owl, raven, red-panda, capybara, bear,
+turtle. It is sent only after a peer advertises `ready.capabilities.builtinPets`.
+`projection` accepts an increasing integer `revision`, a bounded
+`workingCount` and at most 20 items with opaque `id`, `kind` (approval, question,
+result) and an explicitly safe public `summary` of at most 240 characters. No
+Actor authority fields are accepted on stdin. `toggle` changes persistent
+visibility; the task-owned Computer Use indicator remains independently visible.
+`shutdown` or EOF ends the Crew feed, not a live Actor task.
+
+Output contains versioned `ready` capabilities, `state`, opaque `action` events
+(open/dismiss), stable-code `error` and `disconnected`. `computerUse` is null when
+unconfirmed; otherwise session, epoch, task, observation mode/active/generation
+come only from the Actor lifecycle endpoint. Dismiss only removes a reminder;
+open returns its opaque ID to Crew's existing thread/approval flow. Nothing is
+automatically approved. Approvals precede questions, then results. Stale revisions,
+duplicate IDs, unknown fields and unsupported actions are rejected.
+
+New peers advertise at most twelve unique `{species,name}` entries in
+`builtinPets`, validated and decoded once at startup. They always include
+`state.character={source,requestedSpecies,species,name}`. `builtin` identifies
+the actual species/name, `custom` has species=null and the manifest name, and
+`unavailable` has species/name=null. Only weasel/sudo is currently supplied.
+Null preference uses sudo; an explicit missing species never falls back to a
+weasel or previous choice. `builtin_pet_unavailable` is recoverable and deduped,
+not a CU/Companion termination. A validated custom `petPath` wins; resetting it
+uses the preference again. Pack availability is a startup snapshot. These new
+output fields require the paired Crew decoder; old strict peers are not claimed
+compatible. Species selection never comes from background inbox items.
+
+## Custom artwork
+
+The built-in weasel is sudo, with eight four-frame strips. Lumi remains a prior
+reference asset. The asset compiler preserves six original sudo rows and mounts
+only the two approved question/answer corrections into the integer-cell pack ABI.
+Importable packs contain `pet.json` and `pet.png`, with no URLs, scripts or SVG.
+Frames are 64–512 px, a 4 by 8 grid, RGBA 8-bit PNG up to 16 MiB; metadata is at
+most 16 KiB. Rows are idle, working, reading, lookingAway, waiting, attention,
+success and error. Each state fixes frames=4, fps=6, loop=false. Names are at
+most 60 characters. Paths, symlinks, special files, control/Bidi characters and
+oversized dimensions are rejected, and the renderer decodes PNG before use.
+Crew copies imports privately and can return to the default pack. Its generation
+entry opens the normal Agent draft; actual image-tool/provider availability and
+successful artwork generation are distinct from opening that draft.
+
+Motion follows bounded semantic events: a working-count increase or a new Actor
+work interval, a new item ID/kind, or entry into confirmed reading/protection.
+Approval waits with open paws, a question raises one paw beside the head, and a
+new completed answer offers its result without celebrating task success. Frame 3
+is the held state; reduced motion shows it immediately. Twenty recent item cues
+are remembered. Unchanged projections and return from reading resume the held
+item without another wave; a changed summary alone is not a new result. Dismiss
+withdraws the reminder and never changes the underlying request. Engine waiting
+and queue counts alone do not manufacture an approval gesture.
+
+Live evidence must cover the actual native overlay and Electron integration.
+Compilation, unit fixtures and `ready` are separate from visible poses, input
+routing, monitor selection, animation, thread actions and physical device behavior.
 
 ## Ordinary worker-owned session
 
@@ -78,7 +166,12 @@ v1 heartbeat
 v1 phase waiting
 v1 phase queued
 v1 phase active
+v1 phase observing
 v1 phase unknown
+v1 observation enabled idle
+v1 observation enabled active
+v1 observation disabled idle
+v1 observation unknown idle
 v1 activity <plain text>
 v1 end
 ```
@@ -150,6 +243,17 @@ Lifecycle and output queries are read-only. Raw status, window titles,
 environment, command arguments and credentials are never logged. The helper's
 termination and the renderer lease do not establish that the actor has released
 input: inspect fresh actor status independently after Stop/Escape.
+
+The optional "Blick aus" mode is deliberate looking away, not secret detection
+or a universal privacy guarantee. It does not block separately authorized
+private-store references or direct process injection through existing tools.
+The compact lifecycle carries `observation_mode` (`enabled` or `disabled`) and
+`observation_active` (actual content acquisition). Enabled means permission to
+read, not proof of a read. Disabled is shown as private only after the actor
+confirms it. Older actors without these fields show access as unverified; an
+incomplete or contradictory policy response is rejected. A lifecycle timeout
+immediately removes the privacy claim before the bounded retry. The helper
+forwards only these typed fields, never full status, action text or window names.
 
 ## Component verification
 

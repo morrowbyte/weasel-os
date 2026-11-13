@@ -60,13 +60,14 @@ static gboolean end_test(gpointer unused) {
 int main(void) {
     assert(gtk_init_check(NULL, NULL));
     GtkWidget *window = gtk_offscreen_window_new();
+    surfaces[4] = window;
+    island_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
     phase_label = gtk_label_new("Status wird geprüft");
-    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 14);
     privacy_label = gtk_label_new(NULL);
     update_privacy();
-    gtk_box_pack_start(GTK_BOX(box), phase_label, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(box), privacy_label, FALSE, FALSE, 0);
-    gtk_container_add(GTK_CONTAINER(window), box);
+    gtk_box_pack_start(GTK_BOX(island_box), phase_label, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(island_box), privacy_label, FALSE, FALSE, 0);
+    gtk_container_add(GTK_CONTAINER(window), island_box);
     gulong privacy_handler = g_signal_connect_after(privacy_label, "draw", G_CALLBACK(privacy_painted), NULL);
     g_signal_connect_after(phase_label, "draw", G_CALLBACK(phase_painted), NULL);
     gtk_widget_show_all(window);
@@ -128,7 +129,11 @@ int main(void) {
     assert(!phase_ack_pending); /* expired lease discards the pending ACK */
     process_line("v1 phase waiting");
     assert(!phase_ack_pending); /* new phase invalidates old ACK */
+    assert(gtk_style_context_has_class(gtk_widget_get_style_context(window), "waiting"));
+    assert(gtk_widget_get_margin_top(island_box) == 8);
     process_line("v1 phase active 44");
+    assert(!gtk_style_context_has_class(gtk_widget_get_style_context(window), "waiting"));
+    assert(gtk_widget_get_margin_top(island_box) == 14);
     g_idle_add_full(G_PRIORITY_HIGH, end_test, NULL, NULL);
     gtk_main();
     assert(stopped && !phase_ack_pending); /* end invalidates before draw */
@@ -679,7 +684,7 @@ class IndicatorLifecycle(unittest.TestCase):
         self.ready(process)
         lease = next((self.actor_dir / "indicators").glob("task-*.json"))
         data = json.loads(lease.read_text())
-        self.assertEqual(data["deadline_monotonic"] - data["started_monotonic"], 3600)
+        self.assertAlmostEqual(data["deadline_monotonic"] - data["started_monotonic"], 3600, places=6)
         result = subprocess.run([sys.executable, str(SOURCE / "indicator.py"), "end", "--task-id", "fixture-task"], env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(self.ended(process)["reason"], "explicit_end")
@@ -709,6 +714,131 @@ class IndicatorLifecycle(unittest.TestCase):
         started = time.monotonic()
         self.assertEqual(self.ended(process)["reason"], "capability_unavailable")
         self.assertLess(time.monotonic() - started, 0.7)
+
+    def test_crew_disconnect_or_invalid_first_projection_after_reattach_keeps_cu_scope(self):
+        self.env["WEASEL_PET_PRESENTATION"] = "1"
+        self.niri.write_text(
+            f"#!{sys.executable}\nimport json,sys\n"
+            f"outputs={self.niri_state!r}\n"
+            "print(json.dumps({'name':'DP-6', **outputs['DP-6']} if sys.argv[-1]=='focused-output' else outputs))\n"
+        )
+        endpoint = self.actor_dir / "indicators" / "pet.sock"
+        for packet in (b"", b'{"v":1,"type":"projection","commands":["v1 end"]}\n'):
+            with self.subTest(packet=packet):
+                with self.actor_lock:
+                    self.actor_events.clear()
+                process = self.launch()
+                self.ready(process)
+                cleared_before = sum(item["line"] == "v1 bubble clear" for item in self.protocol())
+                attached = threading.Event()
+                failures = []
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+                    server.bind(str(endpoint))
+                    endpoint.chmod(0o600)
+                    server.listen(1)
+                    server.settimeout(2)
+
+                    def close_after_attach():
+                        try:
+                            with server.accept()[0] as peer:
+                                peer.settimeout(1)
+                                request = indicator.read_line(peer, 4096)
+                                self.assertEqual(request["type"], "attach")
+                                peer.sendall(b'{"v":1,"type":"attached"}\n' + packet)
+                            attached.set()
+                        except Exception as error:
+                            failures.append(type(error).__name__)
+                            attached.set()
+
+                    worker = threading.Thread(target=close_after_attach, daemon=True)
+                    worker.start()
+                    try:
+                        self.assertTrue(attached.wait(2), "helper did not reattach")
+                        self.assertEqual(failures, [])
+                        deadline = time.monotonic() + 1
+                        while time.monotonic() < deadline and process.poll() is None:
+                            if sum(item["line"] == "v1 bubble clear" for item in self.protocol()) > cleared_before:
+                                break
+                            time.sleep(0.01)
+                        else:
+                            self.fail("optional bridge failure was not handled locally")
+                        self.assertIsNone(process.poll())
+                        self.assertIn("fixture-task", self.task_scopes)
+                        self.assertTrue(self.phase_request(1)["ok"], "paint/control barrier stopped responding")
+                        self.assertEqual(self.end_control().returncode, 0)
+                        ended = self.ended(process)
+                        self.assertEqual(ended["reason"], "explicit_end")
+                        self.assertTrue(ended["renderer_exit_confirmed"])
+                    finally:
+                        worker.join(timeout=2)
+                endpoint.unlink(missing_ok=True)
+
+    def test_focus_query_failure_retries_without_ending_cu_and_keeps_stop_reachable(self):
+        self.env["WEASEL_PET_PRESENTATION"] = "1"
+        mode_path = self.runtime / "focus-mode"
+        self.niri.write_text(
+            f"#!{sys.executable}\nimport json,sys,time\nfrom pathlib import Path\n"
+            f"outputs={self.niri_state!r}\n"
+            f"mode=Path({str(mode_path)!r}).read_text()\n"
+            "if sys.argv[-1]=='focused-output':\n"
+            " if mode=='slow': time.sleep(0.45)\n"
+            " if mode=='invalid': print('SYNTHETIC-PRIVATE-MARKER'); sys.exit(0)\n"
+            " if mode=='invalid_entry': print(json.dumps({'name':'DP-other'})); sys.exit(0)\n"
+            " print(json.dumps({'name':'DP-6', **outputs['DP-6']}))\n"
+            "else: print(json.dumps({**outputs,'DP-other':None} if mode=='invalid_entry' else outputs))\n"
+        )
+
+        def wait_event(process, wanted):
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline and process.poll() is None:
+                for line in self.stdout_prefix.get(process.pid, b"").splitlines():
+                    event = json.loads(line)
+                    if event.get("event") == wanted:
+                        return event
+                if select.select([process.stdout], [], [], 0.05)[0]:
+                    chunk = os.read(process.stdout.fileno(), 4096)
+                    self.stdout_prefix[process.pid] = self.stdout_prefix.get(process.pid, b"") + chunk
+            self.fail("helper did not report " + wanted)
+
+        for mode, cause, stage in (("invalid", "invalid_json", "focused-output"),
+                                   ("slow", "deadline_expired", "focused-output"),
+                                   ("invalid_entry", "geometry_unavailable", "outputs")):
+            with self.subTest(mode=mode):
+                with self.actor_lock:
+                    self.actor_events.clear()
+                mode_path.write_text(mode)
+                process = self.launch()
+                self.ready(process)
+                retry = wait_event(process, "presentation_focus_retry")
+                self.assertEqual(retry["cause"], cause)
+                self.assertEqual(retry["stage"], stage)
+                self.assertEqual(retry["retry_after_ms"], 500)
+                self.assertIsNone(process.poll())
+                self.assertIn("fixture-task", self.task_scopes)
+                self.assertTrue(self.phase_request(1)["ok"])
+                mode_path.write_text("valid")
+                wait_event(process, "presentation_focus_restored")
+                self.assertEqual(self.end_control().returncode, 0)
+                ended = self.ended(process)
+                self.assertEqual(ended["reason"], "explicit_end")
+                self.assertTrue(ended["renderer_exit_confirmed"])
+                self.assertNotIn("SYNTHETIC-PRIVATE-MARKER", json.dumps(self.last_events))
+                self.assertNotIn("SYNTHETIC-PRIVATE-MARKER", self.renderer_log.read_text())
+
+    def test_focus_retry_does_not_mask_original_target_output_loss(self):
+        self.env["WEASEL_PET_PRESENTATION"] = "1"
+        self.niri.write_text(
+            f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
+            "if sys.argv[-1]=='focused-output': print('invalid-focus-response')\n"
+            f"else: print(Path({str(self.niri_state_path)!r}).read_text())\n"
+        )
+        process = self.launch()
+        self.ready(process)
+        self.niri_state_path.write_text("{}")
+        ended = self.ended(process)
+        self.assertEqual(ended["reason"], "capability_unavailable")
+        self.assertTrue(ended["renderer_exit_confirmed"])
+        self.assertEqual(self.task_scopes, {})
 
     def protocol(self):
         return [json.loads(line) for line in self.renderer_log.read_text().splitlines()]
@@ -854,7 +984,8 @@ class IndicatorLifecycle(unittest.TestCase):
                 self.actor_plan = {1:plan}
                 self.actor_requests.clear()
                 process = self.launch()
-                self.ready(process)
+                # An invalid first live reply can race renderer readiness. Both
+                # orders must end without retry; READY is not a prerequisite.
                 self.assertEqual(self.ended(process)["reason"], "capability_unavailable")
                 self.assertEqual(len(self.actor_requests), 2)
                 self.assertFalse(any(x["event"] == "lifecycle_timeout" for x in self.last_events))

@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "name": "Lumi",
+  "frameWidth": 256,
+  "frameHeight": 256,
+  "sheet": "pet.png",
+  "states": {
+    "idle": { "row": 0, "frames": 4, "fps": 6, "loop": false },
+    "working": { "row": 1, "frames": 4, "fps": 6, "loop": false },
+    "reading": { "row": 2, "frames": 4, "fps": 6, "loop": false },
+    "lookingAway": { "row": 3, "frames": 4, "fps": 6, "loop": false },
+    "waiting": { "row": 4, "frames": 4, "fps": 6, "loop": false },
+    "attention": { "row": 5, "frames": 4, "fps": 6, "loop": false },
+    "success": { "row": 6, "frames": 4, "fps": 6, "loop": false },
+    "error": { "row": 7, "frames": 4, "fps": 6, "loop": false }
+  }
+}

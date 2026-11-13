@@ -84,5 +84,22 @@ in
     home.activation.ensureNiriDmsBootstrap = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
       mkdir -p "$HOME/.config/niri/dms/profiles"
     '';
+
+    # Crew manages the contents; never turn its mutable include into a store link.
+    home.activation.ensureCrewPetBindings = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+      $DRY_RUN_CMD ${pkgs.python3}/bin/python3 - ${lib.escapeShellArg "${config.xdg.configHome}/niri/crew-pet.kdl"} <<'PY'
+      import os
+      import sys
+
+      path = sys.argv[1]
+      os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+      try:
+          descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+      except FileExistsError:
+          pass  # Preserve every existing entry, including dangling symlinks.
+      else:
+          os.close(descriptor)
+      PY
+    '';
   };
 }

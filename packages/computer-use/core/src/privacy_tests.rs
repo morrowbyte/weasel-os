@@ -295,6 +295,39 @@ fn old_unfenced_proxy_content_is_withheld_even_after_reconnect() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+#[test]
+fn realistic_three_action_batch_saves_two_socket_roundtrips() {
+    // Transport measurement only: exact same ctrl+l/type/Return sequence; no
+    // physical input or latency claim. Server verifies request schemas, records
+    // ordered actions and acknowledges one completed RPC per connection.
+    let (state, dir) = cooperative_fixture("privacy-batch-transport");
+    let socket = dir.join("roundtrips.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = thread::spawn(move || {
+        let mut traces = Vec::new();
+        for _ in 0..4 {
+            let (mut stream,_) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap()).read_line(&mut line).unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            preflight_blind_batch(&serde_json::from_value(request["arguments"].clone()).unwrap()).unwrap();
+            traces.push(request["arguments"]["actions"].as_array().unwrap().clone());
+            writeln!(stream,"{}",text_result(json!({"status":"transport_ack"}))).unwrap();
+        }
+        traces
+    });
+    let actions = vec![json!({"kind":"key","keys":["ctrl","l"]}),json!({"kind":"type","text":"https://example.invalid/","text_method":"keyboard"}),json!({"kind":"key","keys":["Return"]})];
+    let call = |actions: Vec<Value>| daemon_call_owned(&socket,"desktop_act",&json!({"observation_id":"structural-fixture","task_id":"fixture-task","actions":actions,"observe_after":false,"include_image":false}),None).unwrap();
+    for action in &actions { call(vec![action.clone()]); }
+    call(actions.clone());
+    let traces = server.join().unwrap();
+    assert_eq!(traces[..3].concat(),actions);
+    assert_eq!(traces[3],actions);
+    println!("Transport evidence: identical ctrl+l/type/Return; single RPCs=3, batch RPCs=1, saved roundtrips=2; no GUI latency measured");
+    drop(state);
+    fs::remove_dir_all(dir).unwrap();
+}
+
 fn acquisition_phase_fixture(label: &str, reject_first: bool) -> (Arc<State>, PathBuf, thread::JoinHandle<Vec<String>>) {
     let (state, dir) = cooperative_fixture(label);
     let path = dir.join("phase.sock");

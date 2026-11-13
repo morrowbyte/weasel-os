@@ -14,10 +14,13 @@ device and sends no input. Both bootstrap syncs have one-second deadlines.
 `capabilities()` and `outputs()` are read-only. The first `move_to()` creates an
 output-bound pointer through virtual-pointer protocol version 2.
 
-`move_to(output, x, y, width, height)` accepts output-local coordinates and
-matching coordinate extents. Use current Niri logical geometry or matching
-screenshot crop dimensions. Fractional coordinates are normalized to one million
-units. `wl_output` integer scale is metadata and must not be substituted for
+`move_to(output, x, y, width, height)` accepts displayed output-local coordinates
+and full output extents. For a screenshot crop, add its output-local origin and
+keep the full PNG dimensions. The transport inverts the confirmed `wl_output`
+transform before normalizing to one million units, because the compositor applies
+that transform to an output-bound virtual pointer. All eight rotations/reflections
+are supported; missing, unknown or incomplete transform updates refuse before input.
+`wl_output` integer scale is metadata and must not be substituted for
 Niri's fractional scale. Out-of-range coordinates, absent/ambiguous output names
 and output changes during a held button are refused.
 

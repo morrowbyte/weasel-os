@@ -39,8 +39,9 @@ fresh `desktop_windows` and any save modal afterward; an ACK or an incomplete
 compact inventory does not prove closure. Preserve uncertain or user-owned
 windows and report them instead of applying process-level cleanup.
 
-For the full workflow, keep the selected output visibly marked with the
-click-through blue indicator. Use the managed `~/.local/bin/weasel-computer-use-indicator`
+For the full workflow, keep the task-owned desktop pet visible. Its covered
+eyes indicate confirmed observation disabled; reading eyes mark an actual
+observation phase. Persistent Crew display is a separate default-off preference. Use the managed `~/.local/bin/weasel-computer-use-indicator`
 for every `run`, `activity` and `end` call. Do not resolve the bare command from
 PATH: an older system profile may still precede the managed user deployment.
 The active phase is acknowledged before scoped dispatch, and the helper keeps
@@ -55,8 +56,11 @@ keep it alive across model-thinking gaps. End with `v1 end\n` through that
 session or the exact task helper's `end` command. End the exact
 task helper on completion or abort. Its monitor/epoch binding and bounded
 lease must hide it after disconnect/stop, without taking keyboard focus.
-Do not launch it as an unrelated permanent daemon or mark the user's other
-monitor. The indicator is lifecycle maintenance; desktop input still uses MCP.
+Do not launch the task helper as an unrelated permanent daemon. Presentation
+follows the focused monitor using structural output queries; the action target
+and all input/Stop guards remain independently bound. Crew may separately own
+a persistent pet, which receives safe thread notifications without authorizing
+Computer Use. Desktop input still uses MCP.
 
 Optional `weasel_decisions.desktop_decide` supplies fast predicate/choice
 evidence using `gpt-6-luna`, separately from free action planning. Use a fresh
@@ -70,6 +74,51 @@ annotations describe effects; they do not expand the user's task authorization.
 After a managed configuration change, prove the connection in a fresh ordinary
 agent session. If a tool is blocked by client approval policy, preserve global
 Codex settings and report/reconnect the specific integration.
+
+Use `desktop_set_observation_mode(mode="disabled")` before a private step and
+inspect its confirmed `observation_mode`, `observation_active` and
+`observation_generation`. `include_image=false` only controls response images;
+`observe_after=false` only controls the normal post-action read. Neither is a
+privacy switch. Disabled blocks screenshot and AT-SPI reads, including implicit
+guards and post-observation, until an explicit switch back to enabled. Never
+enable observation automatically to recover a failed action. The indicator
+shows confirmed private access, permitted access, actual acquisition, or unknown
+status; unknown is not a privacy guarantee. Author only a brief safe activity
+such as "Formular ausfüllen", never the text being entered or a sensitive title.
+Set that activity to the concrete current intent before each meaningful change,
+such as "Notiz ergänzen und speichern". Do not leave a generic test title in a
+real workflow. The compact second line reports confirmed actor phases; it does
+not display hidden thoughts, typed values, paths or window titles.
+
+Before confirming Save As, observe the actual directory and filename rather
+than assuming keyboard focus stayed in the name field. Cancel an unexpected
+overwrite prompt. For test artifacts, use a freshly created task-owned directory
+and a verified unused filename, never an existing source-tree file.
+
+In disabled mode, obtain a fresh `desktop_blind_target` for the already-focused
+window with the live task/session/epoch binding. It is a short-lived structural
+token, not proof of the focused text field. Use only the supported small
+keyboard batch with explicit `observe_after=false` and `include_image=false`;
+auto/clipboard text, paste, pointer and AT-SPI actions are refused. Preserve
+previously proved field focus, and stop if the private target becomes uncertain.
+The result confirms dispatch/release only; it does not verify entered content.
+Do not request credential readback. Reconnect the managed MCP after deploying
+the new actor to expose these tools; an old schema or missing capability is
+not an invitation to emulate the privacy switch with image flags.
+
+This is voluntary looking away, not automatic secret detection or a universal
+leak-prevention claim. Authorized private-store references and direct secret
+injection into the intended process remain available through their existing
+tools. Do not expose secret values in agent context, chat, tool output or logs.
+Only an explicit switch to enabled restores desktop observation.
+
+Reduce model roundtrips by grouping up to four known safe actions whose targets
+survive earlier steps. Keep focus, launch, window close and changed-target work
+separate. In normal mode reuse the existing `after_observation` returned by
+`desktop_act` rather than immediately requesting the same frame again. Keep
+default post-observation for steps needing visual verification; omit it only
+when that result is intentionally unnecessary. A failed or partial batch must
+be inspected before continuing, never replayed blindly.
 
 Start with `desktop_status`. Expected startup `capture_not_attempted=true` is
 not capture failure and does not block an already authorized startup resume.

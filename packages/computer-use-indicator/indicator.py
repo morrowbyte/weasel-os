@@ -24,6 +24,9 @@ import subprocess
 import sys
 import time
 
+from pet_bridge import PetBridge, PetConnector
+from output_probe import FocusProbe, FocusProbeError
+
 REVISION = 1
 POLL_SECONDS = 0.1
 STATUS_TIMEOUT_SECONDS = 0.3
@@ -151,6 +154,8 @@ def parse_lifecycle(result):
         raise CapabilityError("actor lifecycle counters unavailable")
     if any(type(status.get(key)) is not bool for key in ("takeover_latched", "actor_active", "actor_release_confirmed", "task_scope_active")):
         raise CapabilityError("actor lifecycle cancellation/release unavailable")
+    # Older actors cannot attest privacy. Never turn a missing field into a
+    # disabled/read-free claim; the renderer explicitly shows it as unverified.
     observation_state(status)
     return status
 
@@ -398,6 +403,9 @@ def run(args):
     owned_lease_identity = None
     old_signals = {}
     probe = None
+    pet_bridge = None
+    focus_probe = None
+    pet_connector = None
     scope_begin_attempted = False
     scope_token = args.scope_token or secrets.token_urlsafe(32)
     stop_signal = [None]
@@ -449,11 +457,17 @@ def run(args):
             raise CapabilityError("actor does not support owner-bound task scope lifetime")
         privacy = render_observation(renderer, registered)
         privacy_generation = observation_generation(registered)
+        if os.environ.get("WEASEL_PET_PRESENTATION") == "1":
+            pet_bridge = PetBridge.attach(directory, args.task_id, initial, scope_token)
+            if pet_bridge:
+                selector.register(pet_bridge.stream, selectors.EVENT_READ, "pet")
         renderer.stdin.write("v1 begin\n")
         renderer.stdin.flush()
         emit("starting", task_id=args.task_id, output=args.output, pid=os.getpid(), geometry=geometry)
         next_poll = next_heartbeat = started
         next_geometry = started + 1
+        next_focus = started
+        next_pet_attempt = started + 1
         ready = False
         last_valid_at = time.monotonic()
         timeout_retry = 0
@@ -461,6 +475,20 @@ def run(args):
         phase_busy = False
         last_transition = -1
         stdin_pending = bytearray()
+        focus_problem = None
+
+        def retry_focus(cause, stage):
+            nonlocal focus_probe, next_focus, focus_problem
+            if focus_probe is not None:
+                focus_probe.close()
+                focus_probe = None
+            next_focus = time.monotonic() + 0.5
+            problem = (cause, stage)
+            if problem != focus_problem:
+                emit("presentation_focus_retry", task_id=args.task_id,
+                     cause=cause, stage=stage, retry_after_ms=500)
+            focus_problem = problem
+
         while True:
             now = time.monotonic()
             if stop_signal[0] is not None:
@@ -487,6 +515,8 @@ def run(args):
             timeout = POLL_SECONDS if deadline is None else min(POLL_SECONDS, max(0, deadline - time.monotonic()))
             if probe is not None:
                 timeout = min(timeout, max(0, probe.deadline - time.monotonic()))
+            if focus_probe is not None:
+                timeout = min(timeout, max(0, focus_probe.deadline - time.monotonic()))
             probe_error = None
             fresh_status = None
             events = selector.select(timeout=timeout)
@@ -534,6 +564,8 @@ def run(args):
                                         if not select.select([renderer.stdout], [], [], min(0.01, max(0, until - time.monotonic())))[0]:
                                             continue
                                         for rendered in renderer_events.read():
+                                            if rendered.get("event") == "action" and pet_bridge:
+                                                pet_bridge.action(rendered)
                                             if (rendered.get("revision") == REVISION and rendered.get("event") == "phase_applied"
                                                 and rendered.get("task_id") == args.task_id and rendered.get("phase") == render_phase
                                                 and rendered.get("transition") == transition):
@@ -572,6 +604,23 @@ def run(args):
                         fresh_status = key.data.advance(_mask)
                     except (OSError, ValueError, CapabilityError) as error:
                         probe_error = error
+                elif isinstance(key.data, FocusProbe):
+                    try:
+                        focused = key.data.advance(_mask)
+                    except (OSError, ValueError, subprocess.SubprocessError) as error:
+                        cause = error.code if isinstance(error, FocusProbeError) else "query_io_failed"
+                        retry_focus(cause, key.data.stage)
+                    else:
+                        if focused is not None:
+                            pet_output, pet_geometry = focused
+                            renderer.stdin.write(f"v1 monitor {pet_output} {' '.join(map(str, pet_geometry))}\n")
+                            renderer.stdin.flush()
+                            focus_probe.close()
+                            focus_probe = None
+                            next_focus = time.monotonic() + 0.5
+                            if focus_problem is not None:
+                                emit("presentation_focus_restored", task_id=args.task_id)
+                                focus_problem = None
                 elif key.data == "renderer":
                     for event in renderer_events.read():
                         if event.get("revision") == REVISION and event.get("event") == "ready":
@@ -582,6 +631,19 @@ def run(args):
                         elif event.get("event") == "ended":
                             reason = "renderer_" + str(event.get("reason", "ended"))
                             stop_signal[0] = 0
+                        elif event.get("event") == "action" and pet_bridge:
+                            pet_bridge.action(event)
+                elif key.data == "pet":
+                    try:
+                        for command in pet_bridge.read():
+                            renderer.stdin.write(command + "\n")
+                        renderer.stdin.flush()
+                    except (OSError, ValueError):
+                        selector.unregister(pet_bridge.stream)
+                        pet_bridge.close()
+                        pet_bridge = None
+                        renderer.stdin.write("v1 bubble clear\nv1 working 0\n")
+                        renderer.stdin.flush()
                 elif key.data == "stdin":
                     chunk = os.read(sys.stdin.fileno(), 4096)
                     if not chunk:
@@ -651,6 +713,24 @@ def run(args):
             if probe is None and now >= next_poll:
                 probe = LifecycleProbe(selector, actor_socket, args.task_id, initial, scope_token)
                 last_valid_at = None  # no renewal while authority is unknown
+            if pet_bridge is None and os.environ.get("WEASEL_PET_PRESENTATION") == "1":
+                if pet_connector is None and now >= next_pet_attempt:
+                    pet_connector = PetConnector(directory, args.task_id, initial, scope_token)
+                    next_pet_attempt = now + 1
+                if pet_connector is not None:
+                    completed, connected = pet_connector.poll()
+                    if completed:
+                        pet_connector = None
+                        if connected:
+                            pet_bridge = connected
+                            selector.register(pet_bridge.stream, selectors.EVENT_READ, "pet")
+            if focus_probe is not None and now >= focus_probe.deadline:
+                retry_focus("deadline_expired", focus_probe.stage)
+            if focus_probe is None and now >= next_focus and os.environ.get("WEASEL_PET_PRESENTATION") == "1":
+                try:
+                    focus_probe = FocusProbe(selector, graphical_env)
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    retry_focus("query_start_failed", "focused-output")
             if probe is None and now >= next_geometry:
                 new_geometry, new_logical = selected_geometry(args.output, graphical_env)
                 if new_geometry != geometry or new_logical != logical:
@@ -678,6 +758,10 @@ def run(args):
         cleanup_started = time.monotonic()
         if probe is not None:
             probe.close()
+        if focus_probe is not None:
+            focus_probe.close()
+        if pet_connector is not None:
+            pet_connector.close()
         if scope_begin_attempted:
             try:
                 ended = desktop_lifecycle(actor_socket, args.task_id, "end", initial, scope_token)
@@ -709,6 +793,8 @@ def run(args):
                     renderer.kill()
                     renderer.wait(timeout=0.5)
             renderer.stdout.close()
+        if pet_bridge:
+            pet_bridge.close()
         selector.close()
         if server:
             server.close()
