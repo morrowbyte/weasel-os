@@ -59,7 +59,7 @@
     handy-nixpkgs.url = "github:NixOS/nixpkgs/46db2e09e1d3f113a13c0d7b81e2f221c63b8ce9";
     handy = {
       # Pin to the immutable upstream v0.9.6 release with its matching nixpkgs snapshot
-      url = "github:cjpais/Handy/82dfab9fda18c4bc24e1f6e56d36474d38eca0bc";
+      url = "github:cjpais/Handy/aca8985190c3ad7f361d8a80cb30f179513ed690";
       inputs.nixpkgs.follows = "handy-nixpkgs";
     };
     sops-nix = {

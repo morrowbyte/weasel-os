@@ -1611,3 +1611,8 @@ Der erste echte Lauf zeigte wiederholt neu gestartete Online-Kopien der aktiven 
 
 - Updated existing configured sources: flake.lock, packages/chatgpt/default.nix, packages/netbird-bin.nix, packages/netbird-ui-bin.nix, packages/t3code/source.json, packages/xdg-desktop-portal-luminous.nix.
 - Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
+
+### 2026-11-14 — batch candidate 20261114T110530Z-34088075
+
+- Updated existing configured sources: flake.lock, flake.nix, packages/netbird-bin.nix, packages/netbird-ui-bin.nix, packages/t3code/source.json.
+- Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
