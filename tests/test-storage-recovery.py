@@ -192,7 +192,8 @@ class RecoveryTests(unittest.TestCase):
             env = dict(os.environ, RESTIC_REPOSITORY=f'rest:http://weasel:test-token@127.0.0.1:{server.server_port}/',
                        RESTIC_PASSWORD='test-repository-password')
             def run(*args):
-                result = subprocess.run([restic, '--no-cache', *args], env=env, capture_output=True, text=True)
+                result = subprocess.run(backup.restic_command(restic, '--no-cache', *args),
+                                        env=env, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             try:
                 run('init')
@@ -206,7 +207,19 @@ class RecoveryTests(unittest.TestCase):
                 with self.assertRaises(urllib.error.HTTPError) as caught:
                     urllib.request.urlopen(f'http://127.0.0.1:{server.server_port}/config')
                 self.assertEqual(caught.exception.code, 401)
+                # Reproduce the production failure with one connection before
+                # checking that the configured command really prunes via REST.
+                rejected = subprocess.run([restic, '-o', 'rest.connections=1', 'prune'],
+                                          env=env, capture_output=True, text=True)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn('at least two', rejected.stdout + rejected.stderr)
+                (source / 'personal').write_bytes(os.urandom(1024 * 1024))
+                run('backup', str(source))
                 run('forget', '--keep-last', '1', '--prune')
+                run('check', '--read-data')
+                run('restore', 'latest', '--target', str(root / 'after-prune'))
+                self.assertEqual((root / 'after-prune' / str(source).lstrip('/') / 'personal').read_bytes(),
+                                 (source / 'personal').read_bytes())
             finally:
                 server.shutdown()
                 server.server_close()

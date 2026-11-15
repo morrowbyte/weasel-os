@@ -19,6 +19,65 @@ spec.loader.exec_module(cloud)
 
 
 class BackupTests(unittest.TestCase):
+    def test_notification_distinguishes_failed_backup_from_failed_maintenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            for completed in (False, True):
+                with self.assertRaises(RuntimeError):
+                    with cloud.run_status(state, 'weekly') as status:
+                        status['backup_completed'] = completed
+                        status['phase'] = 'maintenance' if completed else 'backup'
+                        raise RuntimeError('synthetic failure')
+                title, message = cloud.failure_notification(state, 'weekly')
+                self.assertEqual('Wartung fehlgeschlagen' in title, completed)
+                self.assertEqual('gespeichert und geprüft' in message, completed)
+            with cloud.run_status(state, 'weekly'):
+                # A new, interrupted run must not reuse the previous success claim.
+                title, _ = cloud.failure_notification(state, 'weekly')
+                self.assertNotIn('erfolgreich', title)
+
+    def test_proton_failures_survive_success_without_exposing_credentials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            drive = cloud.transport.Drive('unused', '/my-files/test', state / 'spool')
+            failure = subprocess.CompletedProcess([], 1,
+                '{"accessToken":"private-access", "ok":false}',
+                'HTTP 429 Too Many Requests https://user:private-password@host/path?token=private-query')
+            success = subprocess.CompletedProcess([], 0, '[]', '')
+            with patch.object(cloud.transport.subprocess, 'run', side_effect=[failure, success]):
+                with self.assertRaises(RuntimeError):
+                    drive.command('list', '/my-files')
+                self.assertEqual(drive.command('list', '/my-files'), [])
+            logs = list((state / 'errors').glob('*.json'))
+            self.assertEqual(len(logs), 1)
+            text = logs[0].read_text()
+            self.assertIn('429 Too Many Requests', text)
+            self.assertNotIn('private-', text)
+            self.assertEqual(logs[0].stat().st_mode & 0o777, 0o600)
+            for _ in range(12):
+                cloud.transport.record_failure(state, 'restic', 'backup', 3, stderr='failure' * 20000)
+            logs = list((state / 'errors').glob('*.json'))
+            self.assertEqual(len(logs), 10)
+            self.assertTrue(all(p.stat().st_size < 70000 for p in logs))
+
+    def test_notify_mode_needs_no_cloud_access(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            state = home / '.local/state/weasel-backup'
+            state.mkdir(parents=True)
+            cloud.transport.private_json(state / 'last-weekly-run.json', {
+                'result': 'running', 'phase': 'maintenance', 'backup_completed': True})
+            notify = home / 'notify'
+            notify.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$HOME/notification"\n')
+            notify.chmod(0o700)
+            result = subprocess.run([os.sys.executable, str(ROOT / 'scripts/weasel-cloud-backup.py'),
+                                     'notify', '--job', 'weekly', '--notify-send', str(notify),
+                                     '--cli', '/nonexistent-cloud-cli', '--excludes', '/unused'],
+                                    env=dict(os.environ, HOME=str(home)), capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('Backup erfolgreich – Wartung fehlgeschlagen',
+                          (home / 'notification').read_text())
+
     def test_crew_copy_finishes_while_other_connection_keeps_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)

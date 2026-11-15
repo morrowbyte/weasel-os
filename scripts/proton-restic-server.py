@@ -11,6 +11,7 @@ import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -20,6 +21,41 @@ import time
 from urllib.parse import urlsplit
 
 KINDS = {'data', 'index', 'keys', 'snapshots', 'locks'}
+
+
+def private_json(path, value):
+    """Atomically publish private state without following an existing log symlink."""
+    with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            json.dump(value, stream)
+            stream.close()
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def record_failure(state, tool, operation, code, stdout='', stderr=''):
+    """Retain ten bounded failures; successes must not erase the diagnosis."""
+    def safe(text):
+        if isinstance(text, bytes):
+            text = text.decode(errors='replace')
+        text = text or ''
+        if len(text) > 32768:
+            text = text[:8192] + '\n<output shortened>\n' + text[-24576:]
+        text = re.sub(r'https?://[^\s\"<>]+', '<URL redacted>', text)
+        text = re.sub(r'(?i)(bearer\s+)\S+', r'\1<redacted>', text)
+        text = re.sub(r'(?i)((?<![\w-])[\"\']?[\w-]{0,40}(?:token|password|secret|authorization)[\w-]{0,40}[\"\']?\s*[:=]\s*)(\"[^\"]*\"|\'[^\']*\'|[^\s,}]+)',
+                      r'\1"<redacted>"', text)
+        return text
+
+    errors = state / 'errors'
+    errors.mkdir(mode=0o700, exist_ok=True)
+    private_json(errors / f'{time.time_ns()}-{tool}.json', {
+        'time': time.time(), 'tool': tool, 'operation': operation, 'code': code,
+        'stdout': safe(stdout), 'stderr': safe(stderr)})
+    for old in sorted(errors.glob('*.json'))[:-10]:
+        old.unlink()
 
 
 class Drive:
@@ -33,17 +69,28 @@ class Drive:
         self.metrics = {'started': time.time(), 'data_packs_uploaded': 0, 'data_bytes_uploaded': 0}
 
     def command(self, *args):
-        result = subprocess.run([self.cli, 'filesystem', *args, '--json'],
-                                capture_output=True, text=True, timeout=3600)
+        try:
+            result = subprocess.run([self.cli, 'filesystem', *args, '--json'],
+                                    capture_output=True, text=True, timeout=3600)
+        except subprocess.TimeoutExpired as exc:
+            record_failure(self.spool.parent, 'proton', args[0], 'timeout', exc.stdout, exc.stderr)
+            raise RuntimeError('Proton Drive operation timed out; see private errors directory') from None
         if result.returncode:
-            raise RuntimeError('Proton Drive operation failed; CLI exit ' + str(result.returncode))
-        payload = json.loads(result.stdout) if result.stdout.strip() else None
+            record_failure(self.spool.parent, 'proton', args[0], result.returncode, result.stdout, result.stderr)
+            raise RuntimeError('Proton Drive operation failed; CLI exit ' + str(result.returncode)
+                               + '; see private errors directory')
+        try:
+            payload = json.loads(result.stdout) if result.stdout.strip() else None
+        except ValueError:
+            record_failure(self.spool.parent, 'proton', args[0], 'invalid-json', result.stdout, result.stderr)
+            raise RuntimeError('Invalid Proton Drive response; see private errors directory') from None
         def failed(value):
             if isinstance(value, dict):
                 return value.get('ok') is False or any(failed(v) for v in value.values())
             return isinstance(value, list) and any(failed(v) for v in value)
         if failed(payload):
-            raise RuntimeError('Proton Drive reported a failed item')
+            record_failure(self.spool.parent, 'proton', args[0], 'failed-item', result.stdout, result.stderr)
+            raise RuntimeError('Proton Drive reported a failed item; see private errors directory')
         return payload
 
     @staticmethod

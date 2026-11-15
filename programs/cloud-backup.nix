@@ -25,7 +25,7 @@ let
       Description = "Proton Drive ${mode} of personal files and mutable state";
       After = [ "dbus.socket" ] ++ pkgs.lib.optional (mode == "weekly") "weasel-cloud-backup.service";
       Wants = [ "dbus.socket" ];
-      OnFailure = [ "weasel-cloud-backup-notify.service" ];
+      OnFailure = [ "weasel-cloud-backup-notify@${mode}.service" ];
     };
     Service = {
       Type = "oneshot";
@@ -50,11 +50,11 @@ in
   ];
   systemd.user.services.weasel-cloud-backup = job "backup";
   systemd.user.services.weasel-cloud-backup-maintain = job "weekly";
-  systemd.user.services.weasel-cloud-backup-notify = {
+  systemd.user.services."weasel-cloud-backup-notify@" = {
     Unit.Description = "Report failed cloud backup on the laptop desktop";
     Service = {
       Type = "oneshot";
-      ExecStart = "${pkgs.libnotify}/bin/notify-send --urgency=critical 'Proton-Drive-Backup fehlgeschlagen' 'Der letzte Lauf war nicht erfolgreich. Bitte systemctl --user status weasel-cloud-backup prüfen.'";
+      ExecStart = "${backup}/bin/weasel-cloud-backup notify --job %i --notify-send ${pkgs.libnotify}/bin/notify-send";
     };
   };
   systemd.user.timers.weasel-cloud-backup = {

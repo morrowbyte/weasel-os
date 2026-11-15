@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Versioned cloud backup and recovery, using restic and official Proton Drive."""
 import argparse
+from contextlib import contextmanager
 import fcntl
 import importlib.util
 import json
@@ -17,6 +18,44 @@ spec.loader.exec_module(transport)
 spec = importlib.util.spec_from_file_location('crew_backup', Path(__file__).with_name('weasel-backup-crew.py'))
 crew = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(crew)
+
+
+def restic_command(binary, *command):
+    # Prune needs two backend connections, even though Drive serializes requests.
+    return [binary, '-o', 'rest.connections=2', *command]
+
+
+@contextmanager
+def run_status(state, mode):
+    status = {'mode': mode, 'started': time.time(), 'backup_completed': False,
+              'phase': 'maintenance' if mode == 'maintain' else 'backup', 'result': 'running'}
+    if mode in ('backup', 'weekly', 'maintain'):
+        transport.private_json(state / f'last-{mode}-run.json', status)
+    try:
+        yield status
+    except BaseException:
+        status['result'] = 'failed'
+        raise
+    else:
+        status['result'] = 'success'
+    finally:
+        if mode in ('backup', 'weekly', 'maintain'):
+            status['finished'] = time.time()
+            transport.private_json(state / f'last-{mode}-run.json', status)
+
+
+def failure_notification(state, mode):
+    try:
+        status = json.loads((state / f'last-{mode}-run.json').read_text())
+    except (OSError, ValueError):
+        status = {}
+    if status.get('backup_completed') and status.get('phase') == 'maintenance':
+        return ('Proton-Drive-Backup erfolgreich – Wartung fehlgeschlagen',
+                'Die neue Sicherung wurde gespeichert und geprüft. Die anschließende Wartung ist fehlgeschlagen. '
+                'Details: ~/.local/state/weasel-backup/errors/')
+    return ('Proton-Drive-Backup fehlgeschlagen',
+            'Die neue Sicherung konnte nicht vollständig bestätigt werden. '
+            'Details: ~/.local/state/weasel-backup/errors/ und last-restic.log')
 
 
 def backup_excludes(source, patterns):
@@ -50,7 +89,9 @@ def verify_snapshot(restic, output, tag, cycle, source=None):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('mode', choices=['probe', 'backup', 'weekly', 'snapshots', 'check', 'restore', 'maintain'])
+    p.add_argument('mode', choices=['probe', 'backup', 'weekly', 'snapshots', 'check', 'restore', 'maintain', 'notify'])
+    p.add_argument('--job', choices=['backup', 'weekly'], default='backup')
+    p.add_argument('--notify-send', default='notify-send')
     p.add_argument('--cli', default='proton-drive')
     p.add_argument('--restic', default='restic')
     p.add_argument('--excludes', type=Path, required=True)
@@ -65,7 +106,11 @@ def main():
     os.umask(0o077)
     state = Path.home() / '.local/state/weasel-backup'
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with (state / 'job.lock').open('a') as lock:
+    if args.mode == 'notify':
+        title, message = failure_notification(state, args.job)
+        subprocess.run([args.notify_send, '--urgency=critical', title, message], check=True)
+        return
+    with run_status(state, args.mode) as status, (state / 'job.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with tempfile.TemporaryDirectory(prefix='spool-', dir=state) as spool:
             drive = transport.Drive(args.cli, args.root, spool)
@@ -100,12 +145,14 @@ def main():
                        RESTIC_PASSWORD_FILE=str(password), RESTIC_CACHE_DIR=str(state / 'restic-cache'))
 
             def restic(*command):
-                result = subprocess.run([args.restic, '-o', 'rest.connections=1', *command],
+                result = subprocess.run(restic_command(args.restic, *command),
                                         env=env, capture_output=True, text=True)
                 # Logs are private; command line/environment never logged here.
                 (state / 'last-restic.log').write_text(result.stdout + result.stderr)
                 (state / ('last-' + command[0] + '.log')).write_text(result.stdout + result.stderr)
                 if result.returncode:
+                    transport.record_failure(state, 'restic', command[0], result.returncode,
+                                             result.stdout, result.stderr)
                     raise RuntimeError('restic failed (exit ' + str(result.returncode) + '); see private last-restic.log')
                 return result.stdout
 
@@ -137,6 +184,8 @@ def main():
                                                 input=json.dumps({'repository': env['RESTIC_REPOSITORY']}), capture_output=True, text=True)
                         (state / 'last-system-restic.log').write_text(result.stdout + result.stderr)
                         if result.returncode:
+                            transport.record_failure(state, 'restic', 'system-probe', result.returncode,
+                                                     result.stdout, result.stderr)
                             raise RuntimeError('Private root-state restore proof failed; see private last-system-restic.log')
                         print('Private root-state restore proof passed, including owner root and mode 0600')
                 elif args.mode in ('backup', 'weekly'):
@@ -160,13 +209,18 @@ def main():
                                                 capture_output=True, text=True)
                         (state / 'last-system-restic.log').write_text(result.stdout + result.stderr)
                         if result.returncode:
+                            transport.record_failure(state, 'restic', 'system-backup', result.returncode,
+                                                     result.stdout, result.stderr)
                             raise RuntimeError('Mutable system-state backup failed; see private last-system-restic.log')
                         snapshots['system-state'] = verify_snapshot(restic, result.stdout, 'system-state', cycle)
                     (state / 'last-success.json').write_text(json.dumps({'time': time.time(), 'ok': True,
                                                                        'source': str(args.source),
                                                                        'cycle': cycle, 'snapshots': snapshots}))
                     print('Cloud backup completed; committed snapshots verified (' + cycle + ')')
+                    status['backup_completed'] = True
                     if args.mode == 'weekly':
+                        status['phase'] = 'maintenance'
+                        transport.private_json(state / 'last-weekly-run.json', status)
                         maintain(restic, state)
                 elif args.mode == 'check':
                     restic('check', '--read-data-subset', '5%')
