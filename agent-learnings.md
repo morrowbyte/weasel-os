@@ -1618,3 +1618,8 @@ Der erste echte Lauf zeigte wiederholt neu gestartete Online-Kopien der aktiven 
 - Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
 
 - 2026-11-15: Fix Proton weekly prune's one-connection limit (Restic REST requires at least two); distinguish verified backup from failed maintenance through per-job status and notification instances. Retain ten bounded private CLI/Restic failures with credential masking so later successes preserve the diagnosis. Verified focused cloud tests, real REST prune/check/restore regression, Nix syntax and laptop evaluation/build; no lockfile/input upgrades.
+
+### 2026-11-15 — batch candidate 20261115T110629Z-25b1c5f2
+
+- Updated existing configured sources: flake.lock, packages/tuios-bin.nix.
+- Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
