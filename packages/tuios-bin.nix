@@ -6,11 +6,11 @@
 
 stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "tuios";
-  version = "0.13.1";
+  version = "0.13.2";
 
   src = fetchurl {
     url = "https://github.com/Gaurav-Gosain/tuios/releases/download/v${finalAttrs.version}/tuios_${finalAttrs.version}_Linux_x86_64.tar.gz";
-    hash = "sha256-ws1aW5oCX5yU0BklR3GOCIhJqPyUrUz9LDgrz1cUv2s=";
+    hash = "sha256-NhIK1zo2+8YZXU3+70A5IN9N0lCADHWaXlE31+R4Zow=";
   };
 
   sourceRoot = ".";

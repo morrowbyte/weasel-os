@@ -1623,3 +1623,8 @@ Der erste echte Lauf zeigte wiederholt neu gestartete Online-Kopien der aktiven 
 
 - Updated existing configured sources: flake.lock, packages/tuios-bin.nix.
 - Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
+
+### 2026-11-16 — batch candidate 20261116T110237Z-e7285826
+
+- Updated existing configured sources: packages/tuios-bin.nix.
+- Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
