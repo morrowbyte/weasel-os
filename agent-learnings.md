@@ -1628,3 +1628,7 @@ Der erste echte Lauf zeigte wiederholt neu gestartete Online-Kopien der aktiven 
 
 - Updated existing configured sources: packages/tuios-bin.nix.
 - Required before submission: all host evaluations, flake checks, the complete laptop build, changed critical app probes, closure inventory and session preservation. Build, activation and background completion require their own receipts.
+
+## 2026-11-17: Preserve active generated theme baseline
+
+Saved the already-live GTK3/GTK4 DMS-generated colors and comment-only DMS windowrules header without changing their bytes or runtime state. Verified canonical out-of-store bindings, stable file hashes/ownership, no open file handles, and exact equality of the evaluated laptop drv to the running system drv. Original/live bytes and exact diff are retained in the private daily receipt; no rebuild or switch was needed for this baseline.
