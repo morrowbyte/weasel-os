@@ -31,7 +31,9 @@ Die QEMU-VM verwendet eine virtuelle Grafikausgabe. Weston stellt dafür einen M
 | Strg+Alt+Escape | Die Steuerung des persönlichen Desktops übernehmen |
 | Super+Umschalt+A | Den persönlichen Desktop nach Sitzungsstart oder Übernahme für neue Aufträge freigeben |
 
-Nach der Anmeldung gibt Super+Umschalt+A den persönlichen Desktop frei. Die gleiche Aktion ist im Terminal als `weasel resume-desktop` verfügbar. Das erste Beispiel benötigt kein Modellkonto:
+![Die mit Super+Space geöffnete Aktionspalette im laufenden Niri-Gast](../../pictures/agent-first-palette.png)
+
+Nach der Anmeldung gibt Super+Umschalt+A den persönlichen Desktop frei. Die gleiche Aktion ist im Terminal als `weasel resume-desktop` verfügbar. Für eine neue private Aufgabe nach Alt+Escape wähle in der Palette **Private Eingaben für neue Aufträge freigeben**. Zum Kennenlernen des Katalogs genügen zwei Terminalbefehle ohne Modellkonto.
 
 ```sh
 weasel catalog
@@ -46,7 +48,7 @@ Ein Agent erreicht die gemeinsamen Aktionen über den lokalen MCP-Server `weasel
 
 Für eine bereits geöffnete Anwendung kann der Actor ein von der App bereitgestelltes Textfeld anhand der Fenster-ID lesen, gezielt ändern und erneut lesen. Fenster, Arbeitsfläche und Fokusereignisse dienen zur Prüfung der Wirkung. Die Möglichkeiten eines vorhandenen Fensters hängen von der App und den angebotenen Wayland- und Accessibility-Schnittstellen ab.
 
-Für eine neue Aufgabe kann eine private Sitzung beliebige installierte native Wayland-Apps mit eigenem Fokus, Home, Bus und Clipboard öffnen:
+Eine private Sitzung kann installierte grafische Programme mit eigenem Fokus, Home, Bus und eigener Zwischenablage öffnen. Native Wayland-Apps verbinden sich direkt, X11-Apps über den privaten Xwayland-Server. Der folgende Aufruf öffnet Mousepad für eine neue Aufgabe.
 
 ```sh
 weasel-workspace --name bericht start --exchange "$HOME/bericht-austausch"
@@ -68,6 +70,8 @@ Mit `weasel-workspace --name bericht view` lässt sich eine laufende Sitzung als
 
 Ein neues Austauschverzeichnis beginnt leer. Programme mit Netzzugriff benötigen bei Sitzungsstart `--network`. Einmalaufträge erhalten eine eindeutige ID. Nach einem Abbruch zeigt ein frischer Blick in Datei oder Fenster, welche Schritte bereits wirksam waren.
 
+Für Dateioperationen im freigegebenen Austauschordner stehen `private_exchange_list`, `private_exchange_lstat` und `private_exchange_rename_noreplace` direkt im Katalog. So kann ein Agent eine Datei umbenennen und den neuen Namen im selben `weasel compose` prüfen. Zum pixelgenauen Arbeiten in Programmen stehen unter anderem Screenshot, Klick, Ziehen und Scrollen bereit. In einem Editor mit Kopierfunktion kann der Agent Text markieren, mit Strg+C kopieren und mit `private_clipboard_read` samt Zeilenumbrüchen zurücklesen. [Beispiele für Dateioperationen](../../packages/agent-desktop/EXCHANGE.md)
+
 Für Dokumente und App-Einstellungen, die einen Gastneustart überdauern sollen, starte die Arbeitsfläche mit `weasel-workspace --name bericht start --persistent`. Öffne sie später mit demselben Befehl. Die Programme erhalten dann wieder ihr eigenes Home. Austauschordner und Netzwerk wählst du bei jedem Start separat.
 
 ## Reproduzierbare Abnahme
@@ -76,6 +80,6 @@ Für Dokumente und App-Einstellungen, die einen Gastneustart überdauern sollen,
 nix build -L --no-write-lock-file .#checks.x86_64-linux.agent-first-desktop
 ```
 
-Der Test bootet einen Wegwerfgast, erfasst Niris Fokusereignisse und prüft ein gespeichertes Mousepad-Dokument sowie den gleichzeitig eingegebenen Vordergrundtext. Weitere Prüfungen betreffen das bereits geöffnete Fenster, seine Pixel, die Zwischenablage, die Tastaturpalette und die drei Clientfenster. Die Modellbenchmarks verwenden einen eigenen frischen Gast pro Versuch. [Aufgaben und Messverfahren](../../tests/agent-bench/README.md) · [Ergebnisse und Fehlversuche](../../tests/agent-bench/RESULTS.md)
+Der Test bootet einen Wegwerfgast, erfasst Niris Fokusereignisse und prüft ein gespeichertes Mousepad-Dokument sowie den gleichzeitig eingegebenen Vordergrundtext. Er startet Codex CLI, ChatGPT Desktop und Crew über das Anwendungsmenü. Ihre drei ausgelieferten lokalen Codex-Backends lesen mit der System-MCP-Konfiguration die Fenster und ergänzen nacheinander dieselbe Datei in Mousepad. Der Test vergleicht die Dateibytes nach jedem Speichern. Die Modellbenchmarks verwenden einen eigenen frischen Gast pro Versuch. [Aufgaben und Messverfahren](../../tests/agent-bench/README.md) · [Ergebnisse und Fehlversuche](../../tests/agent-bench/RESULTS.md)
 
 [Gemeinsamer Katalog](../../packages/agent-desktop/README.md) · [Private Anwendungen](../../packages/agent-desktop/PRIVATE-APPS.md) · [Workspace-Befehle und Datenübergabe](../../packages/agent-workspace/README.md) · [Unterstützte Clientpakete](../../packages/agent-clients/README.md)
