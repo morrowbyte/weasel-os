@@ -179,16 +179,23 @@ visual or canvas targets from the fresh image when semantic actions are absent.
 
 When the live `desktop_semantic_direct` schema exposes `background`, prefer
 `background:true` for click/edit operations that should coexist with the human's
-work. Obtain an observation of the actual target output and exact window ID.
-Use only its returned handles and named actions; `desktop_act` must retain the
-same task/output/window. An actionable background snapshot may have
-`shared_input_ready:false` or a changed global input generation: input in a
-different window does not invalidate object-targeted operations. Actual target,
-window/output/context changes, overlapping input in that target, incomplete
-semantics, Alt+Escape and cancellation remain checked. Keep the batch to background
-semantic click/edit. There is no pointer, key, clipboard or focus fallback;
-`semantic_focus` requires foreground semantics. The app can itself change focus
-after a named action, so verify the result rather than promising isolation.
+work. Resolve the actual Niri window ID and request its AT-SPI tree. When the
+result contains `observation_kind:"window_accessibility"`, pass its
+`observation_id` and object handle to `desktop_act`. An actionable tree can
+target a mapped window on an inactive workspace. The automatic after-observation
+reads that same window's accessibility tree. Check the returned field value or
+app state. On an older actor that supplies background handles without a window
+observation, use an authorized output observation only for a target on its
+visible workspace.
+
+Keep each background batch to click/edit handles from one window. An actionable
+snapshot may report `shared_input_ready:false` during input elsewhere. A
+changed target, uncertain mapping, incomplete semantics, Alt+Escape or client
+cancellation can stop the batch. A named app action can open another window.
+When focus monitoring reports a transition or an uncertain dispatch, inspect
+the actual result and human focus before any subsequent action. An existing
+pixel-only window needs a suitable application integration for concurrent
+operation. Keyboard, pointer, clipboard and explicit focus use the shared seat.
 If the live schema lacks this capability, do not send an invented field or
 claim background support; use an existing app integration or coordinate the
 shared input path. Monitor selection comes from actual runtime inventory and
