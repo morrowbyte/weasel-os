@@ -129,7 +129,7 @@ import tempfile
 import tomllib
 from pathlib import Path
 
-binary, expected_json = sys.argv[1:]
+binary, expected_json, author = sys.argv[1:]
 system = tomllib.loads(Path("/etc/codex/config.toml").read_text())["mcp_servers"]
 for name, program in (("weasel_os", "weasel"), ("weasel_desktop", "weasel-computer-use")):
     assert system[name]["args"] == ["mcp"], name
@@ -162,7 +162,7 @@ with tempfile.TemporaryDirectory(prefix="codex-backend-") as directory:
             send({"method": "initialized"})
             thread = rpc(2, "thread/start", {
                 "cwd": directory, "ephemeral": True,
-                "approvalPolicy": "never", "sandbox": "read-only",
+                "approvalPolicy": "never", "sandbox": "workspace-write",
             })["thread"]["id"]
             listing = rpc(3, "mcpServerStatus/list", {"threadId": thread, "limit": 100})
             tools = {row["name"]: row["tools"] for row in listing["data"]}
@@ -180,9 +180,21 @@ with tempfile.TemporaryDirectory(prefix="codex-backend-") as directory:
             skills = rpc(5, "skills/list", {"cwds": [directory]})
             assert any(skill["name"] == "weasel-desktop" and skill["scope"] == "admin" and skill["enabled"]
                        for entry in skills["data"] for skill in entry["skills"]), skills
+            actions = [
+                {"action": "private_text", "args": {"name": "clients", "text": author}},
+                {"action": "private_key", "args": {"name": "clients", "key": "Ctrl+s"}},
+            ]
+            edit = rpc(6, "mcpServer/tool/call", {
+                "threadId": thread, "server": "weasel_os", "tool": "compose",
+                "arguments": {"steps": actions},
+            })
+            assert not edit.get("isError"), edit
+            saved = json.loads(next(row["text"] for row in edit["content"] if row["type"] == "text"))
+            assert saved["status"] == "completed", saved
+            assert [step["action"] for step in saved["steps"] if step["ok"]] == [a["action"] for a in actions], saved
             print(json.dumps({"backend": binary, "userAgent": hello["userAgent"],
                               "readOnlyTool": "weasel_os.windows", "matchedWindows": expected,
-                              "systemSkill": "weasel-desktop", "modelTurns": 0}))
+                              "systemSkill": "weasel-desktop", "documentEdit": author, "modelTurns": 0}))
         finally:
             server.stdin.close()
             try:
@@ -196,14 +208,30 @@ chatgpt_backend = PurePosixPath(chatgpt_path).parents[1] / "lib/chatgpt/resource
 client_ids = {w["id"]: w["app_id"] for w in clients_seen.values()}
 probe_path = "/home/operator/client-backend-probe.py"
 machine.succeed(operator(f"cat > {probe_path} <<'PYPROBE'\n{client_probe}\nPYPROBE"))
-for backend_label, backend_path in [
-    ("Codex CLI", "/run/current-system/sw/bin/codex"),
-    ("ChatGPT bundled Codex", str(chatgpt_backend)),
-    ("Crew packaged Codex", "/run/current-system/sw/bin/crew-codex"),
+
+# Every client appends to the same real document. The independent driver reads
+# its bytes after each save while the operator keeps typing into their terminal.
+share = "/tmp/agent-client-exchange"
+private = ["weasel-workspace", "--name", "clients"]
+machine.succeed(operator(shlex.join([*private, "start", "--exchange", share])))
+machine.succeed(operator("printf '\\n' > " + share + "/handover.txt"))
+machine.succeed(operator(shlex.join([*private, "open", "--", "mousepad", "--disable-server", "/exchange/handover.txt"])))
+target = shlex.join([*private, "status"]) + """ | jq -er '.windows[] | select(.focused and (.title | contains("handover.txt"))) | .id'"""
+editor_id = int(machine.wait_until_succeeds(operator(target)))
+machine.succeed(operator(shlex.join([*private, "key", "Ctrl+Home"])))
+machine.succeed(operator(f"niri msg action focus-window --id {human_id}"))
+stream = home + "/clients-focus.jsonl"
+machine.succeed(operator(f"systemd-run --user --unit=clients-focus -p StandardOutput=file:{stream} "
+                         'env NIRI_SOCKET="$NIRI_SOCKET" niri msg --json event-stream'))
+machine.wait_until_succeeds(f"jq -es 'any(.[]; any(.WindowsChanged.windows[]?; .is_focused and .id == {human_id}))' {stream}")
+expected_document = ""
+for backend_label, backend_path, author in [
+    ("Codex CLI", "/run/current-system/sw/bin/codex", "Codex"),
+    ("ChatGPT bundled Codex", str(chatgpt_backend), " ChatGPT"),
+    ("Crew packaged Codex", "/run/current-system/sw/bin/crew-codex", " Crew"),
 ]:
-    with subtest(
-        backend_label + " app-server reads the three real windows through system MCP"
-    ):
+    with subtest(backend_label + " reads the three windows and saves in the private editor through system MCP"):
+        machine.send_chars("m")
         command = shlex.join(
             [
                 "timeout",
@@ -212,6 +240,7 @@ for backend_label, backend_path in [
                 probe_path,
                 backend_path,
                 json.dumps(client_ids),
+                author,
             ]
         )
         try:
@@ -223,6 +252,11 @@ for backend_label, backend_path in [
             ))
             raise
         machine.log(receipt.strip())
+        expected_document += author
+        machine.wait_until_succeeds("printf '%s\\n' " + shlex.quote(expected_document) + " | cmp - " + share + "/handover.txt")
+        assert int(machine.succeed(operator(target))) == editor_id
+finish_draft("clients", "mmm", stream)
+machine.succeed(operator(shlex.join([*private, "stop"])))
 
 with subtest("Start the pinned browser and editor through the same action available to agents"):
     for app in ("chrome", "zed"):
