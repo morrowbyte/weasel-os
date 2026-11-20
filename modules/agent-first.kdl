@@ -6,26 +6,26 @@ layout {
     }
 }
 binds {
-    Mod+Space hotkey-overlay-title="System actions" { spawn "weasel" "palette"; }
-    Mod+D hotkey-overlay-title="Applications" { spawn "fuzzel"; }
-    Mod+Return hotkey-overlay-title="Terminal" { spawn "foot"; }
-    Mod+E hotkey-overlay-title="Text editor" { spawn "mousepad"; }
-    Mod+F1 hotkey-overlay-title="Keyboard shortcuts" { show-hotkey-overlay; }
+    Super+Space hotkey-overlay-title="System actions" { spawn "weasel" "palette"; }
+    Super+D hotkey-overlay-title="Applications" { spawn "fuzzel"; }
+    Super+Return hotkey-overlay-title="Terminal" { spawn "foot"; }
+    Super+E hotkey-overlay-title="Text editor" { spawn "mousepad"; }
+    Super+F1 hotkey-overlay-title="Keyboard shortcuts" { show-hotkey-overlay; }
     Alt+Escape allow-inhibiting=false hotkey-overlay-title="Stop agent input" { spawn "@cancel@"; }
     Ctrl+Alt+Escape allow-inhibiting=false hotkey-overlay-title="Take control of desktop" { spawn "weasel-computer-use" "call" "desktop_takeover" "{}"; }
-    Mod+Left { focus-column-left; }
-    Mod+Right { focus-column-right; }
-    Mod+Up { focus-window-up; }
-    Mod+Down { focus-window-down; }
-    Mod+Page_Up { focus-workspace-up; }
-    Mod+Page_Down { focus-workspace-down; }
-    Mod+Shift+Page_Up { move-column-to-workspace-up; }
-    Mod+Shift+Page_Down { move-column-to-workspace-down; }
-    Mod+Shift+Left { move-column-left; }
-    Mod+Shift+Right { move-column-right; }
-    Mod+W { close-window; }
-    Mod+F { maximize-column; }
-    Mod+Shift+F { fullscreen-window; }
-    Mod+Tab { toggle-overview; }
-    Mod+Shift+E { quit; }
+    Super+Left { focus-column-left; }
+    Super+Right { focus-column-right; }
+    Super+Up { focus-window-up; }
+    Super+Down { focus-window-down; }
+    Super+Page_Up { focus-workspace-up; }
+    Super+Page_Down { focus-workspace-down; }
+    Super+Shift+Page_Up { move-column-to-workspace-up; }
+    Super+Shift+Page_Down { move-column-to-workspace-down; }
+    Super+Shift+Left { move-column-left; }
+    Super+Shift+Right { move-column-right; }
+    Super+W { close-window; }
+    Super+F { maximize-column; }
+    Super+Shift+F { fullscreen-window; }
+    Super+Tab { toggle-overview; }
+    Super+Shift+E { quit; }
 }

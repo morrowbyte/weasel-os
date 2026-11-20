@@ -49,15 +49,15 @@ def qemu_key(key: str, *states: bool) -> None:
     machine.qmp_client.send("input-send-event", args)
 
 
-def finish_draft(phase: str, expected_line: str) -> None:
+def finish_draft(phase: str, expected_line: str, stream: str = events_file) -> None:
     qemu_key("ret", True, False)
     marker = f"draft-{phase}-complete"
-    machine.wait_until_succeeds(f"grep -Fq {marker} {events_file}", timeout=30)
+    machine.wait_until_succeeds(f"grep -Fq {marker} {stream}", timeout=30)
     actual = machine.succeed(f"cat {home}/draft-{phase}.txt")
     assert actual == expected_line + "\n", (phase, actual)
     # Parse every event through the title marker, including all focus losses
     # to null and all intermediate windows. Never resubscribe after startup.
-    lines = machine.succeed(f"cat {events_file}").splitlines()
+    lines = machine.succeed(f"cat {stream}").splitlines()
     assert any("WindowsChanged" in json.loads(line) for line in lines)
     for line in lines:
         event = json.loads(line)

@@ -11,7 +11,7 @@ let
   # draft has actually arrived through foot's terminal input.
   draft = writeShellScript "foreground-draft" ''
     set -eu
-    for phase in private actor; do
+    for phase in private actor pixels; do
       IFS= read -r line
       printf '%s\n' "$line" > "$HOME/draft-$phase.txt"
       printf '\033]2;draft-%s-complete\007' "$phase"
@@ -22,7 +22,7 @@ in
 testers.runNixOSTest {
   name = "agent-first-desktop";
 
-  nodes.machine = { config, ... }: {
+  nodes.machine = { config, pkgs, ... }: {
     imports = [ ../../modules/agent-first.nix ];
     users.users.operator.isNormalUser = true;
     services.greetd = {
@@ -38,7 +38,18 @@ testers.runNixOSTest {
         );
       };
     };
-    environment.systemPackages = [ jq ];
+    environment.etc."niri/config.kdl".text = lib.mkAfter ''
+      window-rule {
+          match app-id="^weasel-protected$"
+          block-out-from "screen-capture"
+      }
+    '';
+    nixpkgs.config.allowUnfreePredicate = pkg: lib.getName pkg == "chatgpt";
+    environment.systemPackages = [
+      jq
+      pkgs.imagemagick
+      (pkgs.callPackage ../../packages/agent-clients { })
+    ];
     virtualisation = {
       memorySize = 4096;
       cores = 2;
@@ -50,5 +61,8 @@ testers.runNixOSTest {
     };
   };
 
-  testScript = lib.replaceStrings [ "@draft@" ] [ "${draft}" ] (builtins.readFile ./desktop.py);
+  testScript =
+    lib.replaceStrings [ "@draft@" ] [ "${draft}" ] (builtins.readFile ./desktop.py)
+    + "\n"
+    + builtins.readFile ./pixels.py;
 }
