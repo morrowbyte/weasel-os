@@ -64,5 +64,7 @@ testers.runNixOSTest {
   testScript =
     lib.replaceStrings [ "@draft@" ] [ "${draft}" ] (builtins.readFile ./desktop.py)
     + "\n"
-    + builtins.readFile ./pixels.py;
+    + builtins.readFile ./pixels.py
+    + "\n"
+    + builtins.readFile ./clients.py;
 }

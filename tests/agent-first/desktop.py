@@ -159,10 +159,15 @@ with subtest(
         workspace("text", "private edit ")
         qemu_key("b", True, False)
         workspace("key", "Ctrl+s")
-        machine.wait_until_succeeds(
-            f"printf 'private edit seed\\n' | cmp - {exchange}/private-target.txt",
-            timeout=30,
-        )
+        try:
+            machine.wait_until_succeeds(
+                f"printf 'private edit seed\\n' | cmp - {exchange}/private-target.txt",
+                timeout=30,
+            )
+        except Exception:
+            machine.log(machine.succeed(f"od -An -tx1 {exchange}/private-target.txt"))
+            machine.log(str(workspace("status")))
+            raise
     finally:
         qemu_key("shift", False)
     workspace("screenshot", f"{home}/private-mousepad.png")
