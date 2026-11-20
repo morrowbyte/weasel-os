@@ -47,3 +47,14 @@ with subtest("Choose Mousepad by keyboard and present the same private window tw
                 f"{viewer['id']} and {reopened['id']}, foreground {front_id}")
     machine.succeed(operator(shlex.join([*cli, "stop"])))
     machine.succeed(operator(f"niri msg action close-window --id {front_id}"))
+
+
+with subtest("Escape closes the private launcher without opening an error menu"):
+    result_file = home + "/managed-launch-escape.exit"
+    command = shlex.join(["sh", "-c", f'weasel-agent-launcher; echo "$?" > {result_file}'])
+    machine.succeed(operator("niri msg action spawn -- " + command))
+    machine.wait_until_succeeds(operator(
+        """niri msg --json layers | jq -e 'any(.[]; .namespace == "launcher" or .namespace == "fuzzel")'"""
+    ))
+    machine.send_key("esc")
+    machine.wait_until_succeeds(f"grep -Fx 0 {result_file}", timeout=10)
