@@ -55,6 +55,8 @@ cat "$HOME/bericht-austausch/notiz.txt"
 weasel-workspace --name bericht stop
 ```
 
+Mit `weasel-workspace --name bericht view` lässt sich eine laufende Sitzung als Niri-Fenster öffnen. Solange dieses Fenster den Fokus hat, bedienst du den privaten Desktop selbst. Wechselst du zu einem anderen Fenster, kann der Agent an derselben App weiterarbeiten. Schließt du das Ansichtsfenster, bleibt die private App bis `stop` geöffnet.
+
 Ein neues Austauschverzeichnis beginnt leer. Programme mit Netzzugriff benötigen bei Sitzungsstart `--network`. Einmalaufträge erhalten eine eindeutige ID. Nach einem Abbruch zeigt ein frischer Blick in Datei oder Fenster, welche Schritte bereits wirksam waren.
 
 ## Reproduzierbare Abnahme
