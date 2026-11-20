@@ -9,7 +9,8 @@ from pathlib import Path
 
 ROOT = Path(os.environ["BENCH_RUN"]).resolve()
 SOURCE = Path(os.environ["BENCH_SOURCE"]).resolve()
-FAMILY = os.environ["BENCH_FAMILY"]
+MODE = os.environ["BENCH_FAMILY"]
+FAMILY = "files" if MODE == "files-os" else MODE
 HOME = "/home/operator"
 BENCH = HOME + "/bench"
 APP = "bench"
@@ -135,14 +136,17 @@ def dispatch(request):
     steps = request["steps"]
     if not isinstance(steps, list) or not 1 <= len(steps) <= 32:
         raise ValueError("expected 1 through 32 actions")
-    for step in steps:
-        if step["action"] not in ALLOWED:
-            raise ValueError("action outside prepared workspace")
-        step.setdefault("args", {})["name"] = APP
+    file_call = MODE == "files-os" and all(step["action"] in {"list", "lstat", "rename-noreplace"} for step in steps)
+    if not file_call:
+        for step in steps:
+            if step["action"] not in ALLOWED:
+                raise ValueError("action outside prepared workspace")
+            step.setdefault("args", {})["name"] = APP
     if sum(s["action"] == "private_screenshot" for s in steps) > 1:
         raise ValueError("one screenshot per request")
     payload = shlex.quote(json.dumps({"steps": steps, "id": request_id}))
-    response = json.loads(machine.succeed(operator("printf %s " + payload + " | " + helper("compose")), timeout=110))
+    operation = "files-api" if file_call else "compose"
+    response = json.loads(machine.succeed(operator("printf %s " + payload + " | " + helper(operation)), timeout=110))
     product = response["product"]
     if "screenshot" in product:
         machine.copy_from_machine(BENCH + "/" + product["screenshot"])
@@ -154,7 +158,7 @@ def serve():
         listener.bind(str(ROOT / "control.sock"))
         listener.listen(1)
         listener.settimeout(600)
-        log("ready", family=FAMILY, host=socket.gethostname())
+        log("ready", family=FAMILY, mode=MODE, host=socket.gethostname())
         while True:
             conn, _ = listener.accept()
             with conn:

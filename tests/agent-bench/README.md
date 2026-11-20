@@ -106,3 +106,15 @@ jeweils bis zu 3072 ursprüngliche PNG-Bytes als Base64 zurück. Beim Lesen
 den gemeldeten `next`-Offset verwenden, Dateigröße und SHA-256 über alle
 Teile abgleichen. Das zusammengesetzte PNG dem zuständigen Modell als Bild
 übergeben. Bilddaten gehören ausschließlich in den privaten Bildkanal.
+
+## Freigegebene Dateiverwaltung mit Betriebssystemwerkzeugen
+
+`start DRIVER RUN files-os` öffnet dasselbe Rechnungs-Fixture wie `files`.
+Zusätzlich zu GUI-Aktionen akzeptiert ein separater Compose-Aufruf eine Folge
+von `list` (keine Argumente), `lstat` (`name`) und `rename-noreplace` (`from`,
+`to`). Die Auswahl des Werkzeugs liegt beim Modell. Die Operationen laufen
+als `operator` im Gast. Sämtliche Namen beziehen sich direkt auf den
+freigegebenen Austauschordner. Das Backend verwendet einen Verzeichnis-FD,
+`lstat`-Semantik und Linux `renameat2(RENAME_NOREPLACE)`. Die GUI-only-Modi
+bieten diese Dateifunktionen nicht an. Jede Teiloperation meldet ihre
+Dauer. Die abschließende Prüfung bleibt unabhängig und identisch zu `files`.

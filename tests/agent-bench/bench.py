@@ -73,7 +73,7 @@ def main():
     launch = cmds.add_parser("start", help="start one fresh guest and wait for its model")
     launch.add_argument("driver", type=Path)
     launch.add_argument("run", type=Path)
-    launch.add_argument("family", choices=["edit", "files"])
+    launch.add_argument("family", choices=["edit", "files", "files-os"])
     act = cmds.add_parser("compose", help="submit a weasel compose JSON array on stdin")
     act.add_argument("run", type=Path)
     act.add_argument("id", help="unique id; preserve it on uncertain submission")
