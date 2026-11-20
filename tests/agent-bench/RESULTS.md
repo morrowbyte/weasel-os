@@ -94,3 +94,13 @@ Modellversuch dokumentiert einen Fehler im Benchmark-Aufbau. Für folgende
 Vergleiche öffnet der Runner den Speichern-unter-Dialog. Für die GUI-Prüfung
 muss dort die Dateiliste mit verfügbarer Umbenennen-Aktion belegt sein.
 [GTK-Quellcode zu den Dialogmodi](https://github.com/GNOME/gtk/blob/3.24.52/gtk/gtkfilechooserwidget.c#L2365-L2372)
+
+### Funktionsprobe im korrigierten Dialog
+
+Der VM-Besitzer bestätigte die Bedienbarkeit im echten GTK-Speicherdialog.
+In einer vorbereitenden Terra-Funktionsprobe wurde der sichtbare
+Umbenennen-Eintrag des Kontextmenüs verwendet. Vor dem Abschluss war der
+neue Rechnungsname in der Liste zu sehen. Die unabhängige Prüfung fand den
+neuen Namen mit den ursprünglichen Rechnungsbytes, den erwarteten
+Inventar-Hash, den korrekten Vordergrundentwurf und durchgehenden Fokus.
+Die Vorprobe zählt separat von den unbeeinflussten Modellstichproben.
