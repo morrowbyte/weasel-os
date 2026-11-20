@@ -1093,6 +1093,7 @@ fn focus_with_revalidation(
 pub fn run(request: Value) -> R<Value> {
     let started = Instant::now();
     let conn = connection()?;
+    let connect_ms = started.elapsed().as_secs_f64() * 1000.0;
     match request["operation"].as_str().unwrap_or("") {
         "observe" => {
             let pid = request["pid"]
@@ -1148,12 +1149,14 @@ pub fn run(request: Value) -> R<Value> {
                 serde_json::from_value(request["snapshot"].clone()).map_err(|e| e.to_string())?;
             let object: Object =
                 serde_json::from_value(request["object"].clone()).map_err(|e| e.to_string())?;
+            let validation_started = Instant::now();
             let node = revalidate(
                 &conn,
                 &snapshot,
                 &object,
                 request["operation"] == "set_value",
             )?;
+            let revalidation_ms = validation_started.elapsed().as_secs_f64() * 1000.0;
             if request["operation"] == "set_value" {
                 if !node
                     .interfaces
@@ -1199,12 +1202,12 @@ pub fn run(request: Value) -> R<Value> {
                     Ok(text) => text,
                     Err(error) => {
                         return Ok(
-                            json!({"status":"uncertain","route":"direct_atspi_object","accepted":true,"exact_buffer_bytes_match":false,"saved_artifact_verified":false,"readback_error":error,"latency_ms":started.elapsed().as_secs_f64()*1000.0}),
+                            json!({"status":"uncertain","route":"direct_atspi_object","accepted":true,"exact_buffer_bytes_match":false,"saved_artifact_verified":false,"readback_error":error,"connect_ms":connect_ms,"revalidation_ms":revalidation_ms,"latency_ms":started.elapsed().as_secs_f64()*1000.0}),
                         )
                     }
                 };
                 Ok(
-                    json!({"status":if fresh_text==text{"buffer_verified"}else{"uncertain"},"route":"direct_atspi_object","accepted":true,"exact_buffer_bytes_match":fresh_text.as_bytes()==text.as_bytes(),"saved_artifact_verified":false,"latency_ms":started.elapsed().as_secs_f64()*1000.0}),
+                    json!({"status":if fresh_text==text{"buffer_verified"}else{"uncertain"},"route":"direct_atspi_object","accepted":true,"exact_buffer_bytes_match":fresh_text.as_bytes()==text.as_bytes(),"saved_artifact_verified":false,"connect_ms":connect_ms,"revalidation_ms":revalidation_ms,"latency_ms":started.elapsed().as_secs_f64()*1000.0}),
                 )
             } else {
                 if !node.interfaces.iter().any(|s| s == "org.a11y.atspi.Action") {
@@ -1228,7 +1231,7 @@ pub fn run(request: Value) -> R<Value> {
                     .deserialize()
                     .map_err(|e| e.to_string())?;
                 Ok(
-                    json!({"status":if accepted{"dispatched"}else{"failed"},"route":"direct_atspi_object","accepted":accepted,"ui_result_verified":false,"latency_ms":started.elapsed().as_secs_f64()*1000.0}),
+                    json!({"status":if accepted{"dispatched"}else{"failed"},"route":"direct_atspi_object","accepted":accepted,"ui_result_verified":false,"connect_ms":connect_ms,"revalidation_ms":revalidation_ms,"latency_ms":started.elapsed().as_secs_f64()*1000.0}),
                 )
             }
         }

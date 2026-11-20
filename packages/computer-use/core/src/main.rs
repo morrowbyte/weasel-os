@@ -7,6 +7,7 @@ mod launch;
 mod mcp_cancel_registry;
 mod mcp_response;
 mod observation_policy;
+mod niri_ipc;
 #[cfg(test)]
 mod privacy_tests;
 mod release_recovery;
@@ -2270,15 +2271,15 @@ fn semantic_target(state: &State, obs: &Observation, handle: &str) -> R<Semantic
     }
     if target.background {
         background_semantic_ready(state)?;
-        let windows = niri_epoch(state, "windows", Some(target.epoch))?;
+        let windows = niri_ipc::Inventory::Windows.read(state, target.epoch)?;
         if target.snapshot.sole_window_fallback_allowed
             && windows.as_array().is_none_or(|ws| ws.iter().filter(|w| w["pid"] == target.window["pid"]).count() != 1) {
             return Err("Single-window AT-SPI mapping changed; observe again".into());
         }
         validate_background_semantic_inventory(obs, &target.window,
             &windows,
-            &niri_epoch(state, "workspaces", Some(target.epoch))?,
-            &niri_epoch(state, "outputs", Some(target.epoch))?,
+            &niri_ipc::Inventory::Workspaces.read(state, target.epoch)?,
+            &niri_ipc::Inventory::Outputs.read(state, target.epoch)?,
             !state.input_policy.matches(target.input_generation) || !state.input_policy.controls_released())?;
     } else if obs.focused_window.as_ref().map(identity) != Some(identity(&target.window)) {
         return Err("Semantic handle belongs to another window identity/layout; focus and observe actual target, then read semantics again".into());
@@ -2646,14 +2647,19 @@ fn execute(
             text,
             expected_text,
         } => {
+            let target_started = Instant::now();
             let target = semantic_target(state, obs, handle_id)?;
+            let target_ms = target_started.elapsed().as_secs_f64() * 1000.0;
             if !target.background { validate(state, obs, None, false)?; }
             check_epoch(state, Some(epoch))?;
+            let helper_started = Instant::now();
             *details = atspi_helper(
                 state,
                 json!({"operation":"set_value","snapshot":target.snapshot.as_ref(),"object":target.object,"text":text,"expected_text":expected_text}),
                 epoch,
             )?;
+            details["target_validation_ms"] = json!(target_ms);
+            details["helper_wall_ms"] = json!(helper_started.elapsed().as_secs_f64() * 1000.0);
             if details["status"] != "buffer_verified" {
                 return Err("Direct semantic edit returned uncertain buffer result; inspect new observation and artifact, no retry without new evidence".into());
             }
@@ -2662,14 +2668,19 @@ fn execute(
             handle_id,
             action_name,
         } => {
+            let target_started = Instant::now();
             let target = semantic_target(state, obs, handle_id)?;
+            let target_ms = target_started.elapsed().as_secs_f64() * 1000.0;
             if !target.background { validate(state, obs, None, false)?; }
             check_epoch(state, Some(epoch))?;
+            let helper_started = Instant::now();
             *details = atspi_helper(
                 state,
                 json!({"operation":"click","snapshot":target.snapshot.as_ref(),"object":target.object,"action_name":action_name}),
                 epoch,
             )?;
+            details["target_validation_ms"] = json!(target_ms);
+            details["helper_wall_ms"] = json!(helper_started.elapsed().as_secs_f64() * 1000.0);
             if details["accepted"] != true {
                 return Err("Direct semantic action refused; no pointer fallback attempted".into());
             }
@@ -2833,6 +2844,7 @@ fn act_inner(state: &State, args: &Value, epoch: u64) -> R<Value> {
             _ => {}
         }
     }
+    let preflight_ms = start.elapsed().as_secs_f64() * 1000.0;
     let generated_task = format!("task-{}", state.serial.fetch_add(1, Ordering::SeqCst));
     let admission_gate = state
         .task_scope_gate
@@ -2851,6 +2863,7 @@ fn act_inner(state: &State, args: &Value, epoch: u64) -> R<Value> {
     );
     state.queued.fetch_add(1, Ordering::SeqCst);
     drop(admission_gate);
+    let queue_started = Instant::now();
     let mut ptr = loop {
         if let Err(e) = check_epoch(state, Some(epoch)) {
             state.queued.fetch_sub(1, Ordering::SeqCst);
@@ -2865,6 +2878,7 @@ fn act_inner(state: &State, args: &Value, epoch: u64) -> R<Value> {
             }
         }
     };
+    let queue_ms = queue_started.elapsed().as_secs_f64() * 1000.0;
     // Serialize the queued-to-active handoff with physical Escape. Until the
     // active record is published this request remains counted as live work.
     let _scope_gate = state
@@ -3145,7 +3159,7 @@ fn act_inner(state: &State, args: &Value, epoch: u64) -> R<Value> {
             json!({"task_id":task,"completed_actions":completed,"expected_generation":obs.input_generation,"current_generation":state.input_policy.generation(),"actor_release_confirmed":cleanup_ok,"automatic_replay":false}),
         );
     }
-    let mut data = json!({"schema":1,"task_id":task,"observation_id":obs.id,"accepted_actions":args["actions"],"background_semantic":background_semantic,"status":if canceled{"canceled"}else if input_conflict{"input_conflict"}else if failure.is_some(){"failed"}else{"dispatched"},"input_conflict":input_conflict,"expected_input_generation":obs.input_generation,"input_generation":state.input_policy.generation(),"fresh_observation_required":input_conflict,"takeover_latched":state.takeover.load(Ordering::SeqCst),"automatic_replay":false,"completed_actions":completed,"requested_actions":parsed.actions.len(),"effects":effects,"error":failure,"actor_release_confirmed":cleanup_ok,"timing_ms":{"dispatch_and_release":dispatch_ms,"post_action_settle_wait":settle_wait_ms,"post_observe":after_start.elapsed().as_secs_f64()*1000.0},"total_ms":start.elapsed().as_secs_f64()*1000.0,"after_observation_error":after_error,"verification":"Input acknowledgement only. after_observation is fresh evidence to inspect, not inferred UI success. Verify the expected UI state or independent artifact before reporting success."});
+    let mut data = json!({"schema":1,"task_id":task,"observation_id":obs.id,"accepted_actions":args["actions"],"background_semantic":background_semantic,"status":if canceled{"canceled"}else if input_conflict{"input_conflict"}else if failure.is_some(){"failed"}else{"dispatched"},"input_conflict":input_conflict,"expected_input_generation":obs.input_generation,"input_generation":state.input_policy.generation(),"fresh_observation_required":input_conflict,"takeover_latched":state.takeover.load(Ordering::SeqCst),"automatic_replay":false,"completed_actions":completed,"requested_actions":parsed.actions.len(),"effects":effects,"error":failure,"actor_release_confirmed":cleanup_ok,"timing_ms":{"preflight":preflight_ms,"actor_queue":queue_ms,"dispatch_and_release":dispatch_ms,"post_action_settle_wait":settle_wait_ms,"post_observe":after_start.elapsed().as_secs_f64()*1000.0},"total_ms":start.elapsed().as_secs_f64()*1000.0,"after_observation_error":after_error,"verification":"Input acknowledgement only. after_observation is fresh evidence to inspect, not inferred UI success. Verify the expected UI state or independent artifact before reporting success."});
     let mut image_blocks = Vec::new();
     if blind {
         data.as_object_mut().unwrap().remove("accepted_actions");
@@ -3297,21 +3311,30 @@ fn semantic_direct_held(state: &State, args: &Value, epoch: u64, started: Instan
         .as_u64()
         .ok_or("Niri window_id required")?;
     let input_generation = state.input_policy.generation();
-    let windows = niri_epoch(state, "windows", Some(epoch))?;
+    let windows_now = || if args["background"].as_bool() == Some(true) {
+        niri_ipc::Inventory::Windows.read(state, epoch)
+    } else { niri_epoch(state, "windows", Some(epoch)) };
+    let inventory_started = Instant::now();
+    let windows = windows_now()?;
     let window = background::exact_window(&windows, id)?.clone();
     let pid = window["pid"].as_u64().ok_or("Niri target has no PID")?;
     let title = window["title"].as_str().unwrap_or("");
     let sole_window = windows
         .as_array()
         .is_some_and(|ws| ws.iter().filter(|w| w["pid"].as_u64() == Some(pid)).count() == 1);
-    let raw = atspi_helper(
+    let before_ms = inventory_started.elapsed().as_secs_f64() * 1000.0;
+    let helper_started = Instant::now();
+    let mut raw = atspi_helper(
         state,
         json!({"operation":"observe","pid":pid,"title":title,"single_window":sole_window,"max_nodes":args["max_elements"].as_u64().unwrap_or(1000).clamp(1,1000),"max_depth":args["max_depth"].as_u64().unwrap_or(40).clamp(1,40),"include_text_selection":args["include_text_selection"].as_bool()==Some(true)}),
         epoch,
     )?;
-    let snapshot: atspi::Snapshot = serde_json::from_value(raw["snapshot"].clone())
+    let helper_ms = helper_started.elapsed().as_secs_f64() * 1000.0;
+    let helper_reported = raw["latency_ms"].clone();
+    let snapshot: atspi::Snapshot = serde_json::from_value(raw["snapshot"].take())
         .map_err(|e| format!("Direct semantic snapshot invalid: {e}"))?;
-    let fresh_windows = niri_epoch(state, "windows", Some(epoch))?;
+    let recheck_started = Instant::now();
+    let fresh_windows = windows_now()?;
     let fresh = background::exact_window(&fresh_windows, id)?;
     if identity(fresh) != identity(&window) || fresh["title"] != window["title"]
         || (sole_window && fresh_windows.as_array().unwrap().iter().filter(|w| w["pid"] == pid).count() != 1) {
@@ -3321,6 +3344,8 @@ fn semantic_direct_held(state: &State, args: &Value, epoch: u64, started: Instan
     let observation = if args["background"].as_bool() == Some(true) {
         Some(background::observation(state, fresh, epoch, input_generation, started)?)
     } else { None };
+    let recheck_ms = recheck_started.elapsed().as_secs_f64() * 1000.0;
+    let publish_started = Instant::now();
     let mut data = semantic_snapshot_data(state, args, fresh.clone(), snapshot, epoch, input_generation, started)?;
     if let Some(obs) = observation {
         data["workspace_id"] = fresh["workspace_id"].clone();
@@ -3331,6 +3356,9 @@ fn semantic_direct_held(state: &State, args: &Value, epoch: u64, started: Instan
             retain_observation(state, obs)?;
         }
     }
+    data["timing_ms"] = json!({"inventory_before":before_ms, "atspi_helper":helper_ms,
+        "atspi_reported":helper_reported, "inventory_recheck":recheck_ms,
+        "publish_handles":publish_started.elapsed().as_secs_f64()*1000.0});
     Ok(text_result(data))
 }
 

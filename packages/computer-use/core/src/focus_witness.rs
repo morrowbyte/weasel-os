@@ -12,11 +12,7 @@ use std::{
     cell::RefCell,
     env,
     io::{BufRead, BufReader, ErrorKind, Write},
-    mem::{offset_of, size_of, zeroed},
-    os::{
-        fd::{AsRawFd, FromRawFd},
-        unix::{ffi::OsStrExt, net::UnixStream},
-    },
+    os::unix::net::UnixStream,
     path::Path,
     thread,
     time::{Duration, Instant},
@@ -126,41 +122,6 @@ pub(super) fn check_dispatch() -> WitnessResult<()> {
     })
 }
 
-// A blocking AF_UNIX connect can wait indefinitely on a full accept queue.
-// Use a nonblocking socket from creation. On backlog pressure fail before dispatch.
-fn connect(path: &Path) -> WitnessResult<UnixStream> {
-    let bytes = path.as_os_str().as_bytes();
-    // SAFETY: sockaddr_un's integer and byte-array fields admit all-zero values.
-    let mut addr: libc::sockaddr_un = unsafe { zeroed() };
-    if !path.is_absolute() || bytes.contains(&0) || bytes.len() >= addr.sun_path.len() {
-        return Err(UNAVAILABLE);
-    }
-    addr.sun_family = libc::AF_UNIX as _;
-    for (dst, &byte) in addr.sun_path.iter_mut().zip(bytes) {
-        *dst = byte as _;
-    }
-    // SAFETY: socket takes no pointers. On success stream takes sole ownership.
-    let fd = unsafe {
-        libc::socket(
-            libc::AF_UNIX,
-            libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
-            0,
-        )
-    };
-    if fd < 0 {
-        return Err(UNAVAILABLE);
-    }
-    let stream = unsafe { UnixStream::from_raw_fd(fd) };
-    let len = offset_of!(libc::sockaddr_un, sun_path) + bytes.len() + 1;
-    debug_assert!(len <= size_of::<libc::sockaddr_un>());
-    // SAFETY: initialized AF_UNIX address with the byte count including its terminator.
-    let result = unsafe { libc::connect(fd, (&raw const addr).cast(), len as libc::socklen_t) };
-    if result != 0 {
-        return Err(UNAVAILABLE);
-    }
-    Ok(stream)
-}
-
 impl FocusWitness {
     pub(crate) fn start(
         expected_focus: Option<u64>,
@@ -170,7 +131,7 @@ impl FocusWitness {
             return Err(CANCELLED);
         }
         let path = env::var_os("NIRI_SOCKET").ok_or(UNAVAILABLE)?;
-        Self::subscribe(connect(Path::new(&path))?, expected_focus, cancelled)
+        Self::subscribe(super::niri_ipc::connect(Path::new(&path))?, expected_focus, cancelled)
     }
 
     fn subscribe(

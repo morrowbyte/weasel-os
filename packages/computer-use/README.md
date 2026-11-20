@@ -376,6 +376,22 @@ coalesce changes, and the stream only covers compositor-reported toplevel focus
 through the bounded readback. Ordinary typing in another window can continue.
 Cancellation and loss of the physical Escape monitor still stop subsequent input.
 
+For a warm timing comparison use one already-running actor, the same app tree,
+the same settle interval and the same foreground typing fixture. Read these
+monotonic millisecond fields from a successful `desktop_act` response:
+
+* `timing_ms.preflight` and `actor_queue` are parts of `dispatch_and_release`.
+* `effects[0].details.target_validation_ms` covers dispatch-time target checks.
+  `helper_wall_ms` includes the helper subprocess and its observation guard.
+  The helper reports `connect_ms` and `revalidation_ms` within its `latency_ms`.
+* `after_observation.timing_ms` shows the first inventory, the helper call,
+  the fresh inventory recheck and handle publication. `atspi_reported` is
+  nested inside `atspi_helper`. The outer `post_observe` includes settling.
+
+Report external wall time separately. With a Niri socket, each background
+inventory query opens a private, short-lived connection and asks for fresh data.
+Target preflight and dispatch still see independent replies.
+
 #### Pixel-only windows
 
 The project pins Niri 26.04. Its [screenshot by window ID](https://github.com/niri-wm/niri/blob/8ed0da44d974c32c6877d2f4630c314da0717ecb/src/input/mod.rs#L764-L786)

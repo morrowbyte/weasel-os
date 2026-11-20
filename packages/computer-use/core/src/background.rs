@@ -23,11 +23,11 @@ pub(super) fn observation(
 ) -> R<Observation> {
     let id = window["id"].as_u64().ok_or("Missing window ID")?;
     let workspace = window["workspace_id"].as_u64().ok_or("Window has no workspace")?;
-    let workspaces = niri_epoch(state, "workspaces", Some(epoch))?;
+    let workspaces = niri_ipc::Inventory::Workspaces.read(state, epoch)?;
     let mut matches = workspaces.as_array().ok_or("Workspace inventory unavailable")?
         .iter().filter(|w| w["id"].as_u64() == Some(workspace));
     let output = matches.next().and_then(|w| w["output"].as_str()).ok_or("Workspace has no output")?;
-    let geometry = niri_epoch(state, "outputs", Some(epoch))?[output]["logical"].clone();
+    let geometry = niri_ipc::Inventory::Outputs.read(state, epoch)?[output]["logical"].clone();
     if matches.next().is_some() || !geometry.is_object() {
         return Err("Window has no unique workspace on an enabled output".into());
     }
