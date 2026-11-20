@@ -6,7 +6,10 @@
   grim,
   wtype,
   wl-clipboard,
+  chromium,
+  zed-editor,
   cua-driver ? null,
+  agentFirstLaunch ? false,
 }:
 rustPlatform.buildRustPackage {
   pname = "weasel-computer-use";
@@ -15,6 +18,10 @@ rustPlatform.buildRustPackage {
   cargoRoot = "core";
   buildAndTestSubdir = "core";
   cargoLock.lockFile = ./core/Cargo.lock;
+  env = lib.optionalAttrs agentFirstLaunch {
+    WEASEL_VM_ZED = "${zed-editor}/libexec/zed-editor";
+    WEASEL_VM_CHROMIUM = "${chromium}/bin/chromium";
+  };
   nativeBuildInputs = [ makeWrapper ];
   postInstall = ''
     mv "$out/bin/weasel-computer-use-core" "$out/bin/weasel-computer-use"

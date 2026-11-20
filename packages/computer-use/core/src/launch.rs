@@ -6,15 +6,28 @@ use std::{fs, os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt}, path::
 type R<T> = Result<T, String>;
 pub const REVISION: u32 = 1;
 pub const PROJECT_ROOT: &str = "/home/evilweasel/source/personal/jarvis";
-// Immutable installed paths inspected 2026-10-13; absent pins are unavailable,
-// never replaced by PATH lookup or a caller-supplied binary.
-pub const ZED: &str = "/nix/store/j7y0acvm99dcdmsf0f7llbb5hjmpq88j-zed-editor-1.22.0/bin/zeditor";
-pub const ZED_APP: &str = "/nix/store/j7y0acvm99dcdmsf0f7llbb5hjmpq88j-zed-editor-1.22.0/libexec/zed-editor";
-pub const CHROME: &str = "/nix/store/ki71ax98a77yj17xygmnk6ziizy4j099-google-chrome-155.0.8059.39/bin/google-chrome-stable";
+// Preserve the installed laptop contract for the default build.
+const LAPTOP_ZED_CLI: &str = "/nix/store/j7y0acvm99dcdmsf0f7llbb5hjmpq88j-zed-editor-1.22.0/bin/zeditor";
+const LAPTOP_ZED_APP: &str = "/nix/store/j7y0acvm99dcdmsf0f7llbb5hjmpq88j-zed-editor-1.22.0/libexec/zed-editor";
+const LAPTOP_CHROME: &str = "/nix/store/ki71ax98a77yj17xygmnk6ziizy4j099-google-chrome-155.0.8059.39/bin/google-chrome-stable";
+const VM_ZED: Option<&str> = option_env!("WEASEL_VM_ZED");
+const VM_CHROMIUM: Option<&str> = option_env!("WEASEL_VM_CHROMIUM");
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum App { Zed, Chrome }
+impl App {
+    fn program(self) -> &'static str {
+        match self {
+            Self::Zed => VM_ZED.unwrap_or(LAPTOP_ZED_CLI),
+            Self::Chrome => VM_CHROMIUM.unwrap_or(LAPTOP_CHROME),
+        }
+    }
+    fn available(self) -> bool {
+        executable(self.program())
+            && (!matches!(self, Self::Zed) || VM_ZED.is_some() || executable(LAPTOP_ZED_APP))
+    }
+}
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Project { Jarvis }
@@ -56,7 +69,21 @@ fn executable(path: &str) -> bool {
     fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 pub fn capability() -> Value {
-    json!({"revision":REVISION,"implemented":true,"standalone":true,"apps":["zed","chrome"],"projects":["jarvis"],"outputs":"runtime enabled outputs; current task target remains explicit","pinned_binaries_present":{"zed":executable(ZED)&&executable(ZED_APP),"chrome":executable(CHROME)},"isolation":"fresh private user-data-dir per action; Zed --new --foreground, Chrome --new-window","spawn_ack_is_ui_success":false,"uncertain_after_spawn_requires_verification":true,"automatic_retry":false,"live_isolation_attested":false})
+    let isolation = if VM_ZED.is_some() {
+        "fresh private user-data-dir per action; direct Zed GUI, Chromium --new-window"
+    } else {
+        "fresh private user-data-dir per action; Zed --new --foreground, Chrome --new-window"
+    };
+    json!({
+        "revision": REVISION, "implemented": true, "standalone": true,
+        "apps": ["zed", "chrome"], "projects": ["jarvis"],
+        "project_roots_present": {"jarvis": project_path(Path::new(PROJECT_ROOT), None).is_ok()},
+        "outputs": "runtime enabled outputs; current task target remains explicit",
+        "pinned_binaries_present": {"zed": App::Zed.available(), "chrome": App::Chrome.available()},
+        "isolation": isolation, "spawn_ack_is_ui_success": false,
+        "uncertain_after_spawn_requires_verification": true, "automatic_retry": false,
+        "live_isolation_attested": false
+    })
 }
 pub struct Plan { pub program: &'static str, pub args: Vec<String> }
 impl Plan {
@@ -69,8 +96,7 @@ impl Plan {
 }
 pub fn plan(request: Request<'_>, profile: &Path) -> R<Plan> {
     let app = match request { Request::App(app) => app, _ => App::Zed };
-    let program = match app { App::Zed => ZED, App::Chrome => CHROME };
-    if !executable(program) || matches!(app, App::Zed) && !executable(ZED_APP) {
+    if !app.available() {
         return Err("Launch capability unavailable: exact isolated app binary pin missing".into());
     }
     let mut paths = Vec::new();
@@ -85,11 +111,21 @@ pub fn plan(request: Request<'_>, profile: &Path) -> R<Plan> {
     command_plan(app, profile, paths)
 }
 fn command_plan(app: App, profile: &Path, paths: Vec<PathBuf>) -> R<Plan> {
-    let program = match app { App::Zed => ZED, App::Chrome => CHROME };
+    let program = app.program();
     let profile = profile.to_str().ok_or("Private launch profile path is not UTF-8")?;
     let mut args: Vec<String> = match app {
-        App::Zed => vec!["--zed".into(), ZED_APP.into(), "--foreground".into(), "--new".into(), "--user-data-dir".into(), profile.into()],
-        App::Chrome => vec![format!("--user-data-dir={profile}"), "--new-window".into(), "--no-first-run".into(), "--no-default-browser-check".into(), "about:blank".into()],
+        // The Linux CLI spawns a child even with --foreground. Launch the VM
+        // GUI directly so Niri can report the PID from the actor's receipt.
+        App::Zed if VM_ZED.is_some() => vec!["--user-data-dir".into(), profile.into()],
+        App::Zed => vec!["--zed".into(), LAPTOP_ZED_APP.into(), "--foreground".into(), "--new".into(), "--user-data-dir".into(), profile.into()],
+        App::Chrome => {
+            let mut args = vec![format!("--user-data-dir={profile}"), "--new-window".into(), "--no-first-run".into(), "--no-default-browser-check".into()];
+            if VM_CHROMIUM.is_some() {
+                args.push("--ozone-platform=wayland".into());
+            }
+            args.push("about:blank".into());
+            args
+        }
     };
     for path in paths {
         args.push(path.to_str().ok_or("Canonical project path is not UTF-8")?.into());
@@ -249,11 +285,20 @@ mod command_tests {
     fn fixed_commands_have_fresh_profile_and_no_reserved_identity_or_shell_arguments() {
         let private = Path::new("/private/actor/new-profile");
         let zed = command_plan(App::Zed, private, vec![PathBuf::from(PROJECT_ROOT), PathBuf::from(format!("{PROJECT_ROOT}/README.md"))]).unwrap();
-        assert_eq!(zed.program, ZED);
-        assert_eq!(zed.args, vec!["--zed",ZED_APP,"--foreground","--new","--user-data-dir","/private/actor/new-profile",PROJECT_ROOT,"/home/evilweasel/source/personal/jarvis/README.md"]);
+        assert_eq!(zed.program, VM_ZED.unwrap_or(LAPTOP_ZED_CLI));
+        let mut zed_args = vec!["--user-data-dir", "/private/actor/new-profile", PROJECT_ROOT, "/home/evilweasel/source/personal/jarvis/README.md"];
+        if VM_ZED.is_none() {
+            zed_args.splice(0..0, ["--zed", LAPTOP_ZED_APP, "--foreground", "--new"]);
+        }
+        assert_eq!(zed.args, zed_args);
         let chrome = command_plan(App::Chrome, private, vec![]).unwrap();
-        assert_eq!(chrome.program, CHROME);
-        assert_eq!(chrome.args, vec!["--user-data-dir=/private/actor/new-profile","--new-window","--no-first-run","--no-default-browser-check","about:blank"]);
+        assert_eq!(chrome.program, VM_CHROMIUM.unwrap_or(LAPTOP_CHROME));
+        let mut chrome_args = vec!["--user-data-dir=/private/actor/new-profile", "--new-window", "--no-first-run", "--no-default-browser-check"];
+        if VM_CHROMIUM.is_some() {
+            chrome_args.push("--ozone-platform=wayland");
+        }
+        chrome_args.push("about:blank");
+        assert_eq!(chrome.args, chrome_args);
         for args in [&zed.args, &chrome.args] {
             assert!(!args.iter().any(|a| a.contains("YouTube") || a.contains("Alarm") || a.contains("reserved") || a == "--reuse"));
         }
