@@ -77,6 +77,7 @@
         ./flake/modules/outputs.nix
         ./flake/modules/nixos-configurations.nix
         ./flake/modules/module-exports.nix
+        ./flake/modules/agent-first.nix
       ];
     };
 }

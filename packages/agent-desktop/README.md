@@ -27,7 +27,7 @@ weasel run window_inspect '{"window_id":42}'
 | --- | --- |
 | `read` | Liest Inventar, Status, AT-SPI-Elemente oder ein Bild der benannten privaten Sitzung. |
 | `foreground` | Fokussiert ein vorhandenes Fenster oder die Niri-Arbeitsfläche seines aktiven Fensters. Ein App-Start kann den Fokus wechseln. |
-| `app-background` | Ändert ein eindeutig benanntes editierbares AT-SPI-Objekt im sichtbaren Zielfenster. Der Actor prüft Handle, Kontext und erwarteten alten Text. Weasel prüft den neuen Text und vergleicht den Fensterfokus vor und nach dem Aufruf. |
+| `app-background` | Ändert ein eindeutig benanntes editierbares AT-SPI-Objekt im gemappten Zielfenster, auch auf einer anderen Arbeitsfläche. Der Actor prüft Handle, Kontext und erwarteten alten Text. Der Actor liest den Puffer zurück und überwacht Niris Fensterfokus während der Ausführung. Weasel prüft diesen Beleg und die frische Beobachtung des Zielfensters. |
 | `private-workspace` | Eingaben, App-Start und Lebenszyklus einer benannten, separaten Wayland-Sitzung. Die Palette selbst nimmt während der Auswahl Tastaturfokus. Bei einem interaktiv gewählten Screenshot öffnet sie das Bild in imv. |
 
 Für Niri-Fokus, Start oder direkte Bearbeitung braucht die Zielmaschine einen laufenden, betriebsbereiten `weasel-computer-use`-Dienst sowie den funktionierenden Sitzungsindikator. Die Paketinstallation allein richtet diese Dienste nicht ein. Weasel öffnet einen eigenen Task-Scope, bindet jede Aktion an `task_id` und frische Beobachtung und übernimmt Stopp, Übernahme und Freigabestatus des Actors. Ein Scope ist an seine Anzeige gebunden. Ein erneuter Desktopauftrag auf einer anderen Anzeige beginnt mit einer neuen Sequenz.

@@ -108,16 +108,21 @@ class Desktop:
         if background:
             window = one((w for w in inventory["windows"] if w["id"] == target),
                          "Zielfenster nicht eindeutig")
-            space = one((w for w in spaces if w["id"] == window["workspace_id"] and w["is_active"]),
-                        "Zielfenster hat keine sichtbare Arbeitsfläche")
+            space = one((w for w in spaces if w["id"] == window["workspace_id"]),
+                        "Zielfenster hat keine eindeutige Arbeitsfläche")
         else:
             space = one((w for w in spaces if w["is_focused"]), "Keine eindeutige fokussierte Ausgabe")
         output = space["output"]
         await self.scope(output, title)
-        observation = await self.call("desktop_observe", {"output": output, "include_image": False})
-        if (observation["epoch"] != self.epoch
-                or not observation["observation_id"].startswith(f"obs-{self.session}-")):
-            raise ActionError("Actor-Sitzung oder Stopp-Epoche gewechselt")
+        if background:
+            observation = await self.call("desktop_semantic_direct", {"window_id": target, "background": True})
+            prefix = "ax-obs"
+        else:
+            observation = await self.call("desktop_observe", {"output": output, "include_image": False})
+            prefix = "obs"
+        if (observation.get("epoch") != self.epoch
+                or not (observation.get("observation_id") or "").startswith(f"{prefix}-{self.session}-")):
+            raise ActionError("Keine handlungsbereite Beobachtung in der gebundenen Actor-Sitzung")
         if name == "workspace_focus":
             space = one((s for s in observation["workspaces"] if s["id"] == args["workspace_id"]),
                         "Niri-Arbeitsfläche fehlt")
@@ -127,7 +132,7 @@ class Desktop:
         if name == "app_launch":
             action = {"kind": "launch_app", "app": args["app"]}
         elif background:
-            info = await self.call("desktop_semantic_direct", {"window_id": target, "background": True})
+            info = observation
             if info.get("elements_complete") is not True or info.get("action_ready") is not True:
                 raise ActionError("Kein vollständiger, handlungsbereiter AT-SPI-Baum")
             element = one((e for e in info["elements"] if e["label"] == args["label"]
@@ -147,16 +152,10 @@ class Desktop:
         if background:
             if receipt.get("background_semantic") is not True:
                 raise ActionError("Hintergrundwirkung unbestätigt", receipt)
-            try:
-                readback = await self.call("desktop_semantic_direct", {"window_id": target, "background": True})
-            except (ActionError, OSError, ValueError, asyncio.CancelledError) as exc:
-                raise ActionError("Eingabe quittiert; Rücklesen fehlgeschlagen", receipt) from exc
-            matches = [e for e in readback["elements"] if e["label"] == args["label"] and e["editable"]]
-            verified = (readback.get("elements_complete") is True and len(matches) == 1
-                        and matches[0].get("text_excerpt") == args["text"] and len(args["text"]) < 512
-                        and after.get("observation_id") is not None
-                        and (after.get("focused_window") or {}).get("id")
-                        == (observation.get("focused_window") or {}).get("id"))
+            details = receipt["effects"][0]["details"]
+            verified = (after.get("niri_window_id") == target and after.get("elements_complete") is True
+                        and details.get("exact_buffer_bytes_match") is True
+                        and details.get("focus_events") == "no_change_observed")
         elif name == "app_launch":
             pid = receipt["effects"][0]["details"]["spawn"]["pid"]
             before_ids = {w["id"] for w in observation["windows"]}

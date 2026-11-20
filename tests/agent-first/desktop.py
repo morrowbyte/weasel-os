@@ -1,5 +1,6 @@
 import json
 import shlex
+import time
 from typing import Any
 
 
@@ -81,9 +82,14 @@ def finish_draft(phase: str, expected_line: str) -> None:
 
 machine.start()
 machine.wait_for_unit("greetd.service")
-machine.wait_until_succeeds(
-    operator("niri msg --json outputs | jq -e 'length == 1'"), timeout=90
-)
+try:
+    machine.wait_until_succeeds(
+        operator("niri msg --json outputs | jq -e 'length == 1'"), timeout=90
+    )
+except Exception:
+    machine.log(machine.succeed("journalctl -b -u greetd --no-pager -n 60"))
+    machine.log(machine.succeed("journalctl -b --user-unit=niri --no-pager -n 45"))
+    raise
 
 with subtest("Set up a Mousepad background target and an active foot draft on Niri"):
     # Dismiss Niri's first-login hotkey overlay before any draft is open.
@@ -114,6 +120,10 @@ with subtest("Set up a Mousepad background target and an active foot draft on Ni
             timeout=45,
         )
     )
+    machine.succeed(operator("niri msg action move-column-to-workspace-down --focus true"))
+    separated = json.loads(machine.succeed(operator("niri msg --json windows")))
+    workspaces = {window["id"]: window["workspace_id"] for window in separated}
+    assert workspaces[target_id] != workspaces[human_id]
     machine.succeed(
         operator(
             f"systemd-run --user --unit=test-focus-events -p StandardOutput=file:{events_file} "
@@ -166,7 +176,6 @@ with subtest(
 with subtest(
     "Existing actor edits the unfocused Niri Mousepad via AT-SPI with buffer readback"
 ):
-    visual = actor("desktop_observe", include_image=False)
     semantic_args = {"window_id": target_id, "background": True}
     tree = actor("desktop_semantic_direct", **semantic_args)
     assert tree["background"] and tree["elements_complete"], tree
@@ -184,14 +193,15 @@ with subtest(
         "expected_text": "actorbefore",
         "text": "actorafter",
     }
+    started = time.perf_counter()
     result = actor(
         "desktop_act",
-        observation_id=visual["observation_id"],
+        observation_id=tree["observation_id"],
         window_id=target_id,
         task_id="vm-background-edit",
         actions=[action],
         include_image=False,
-        observe_after=False,
+        observe_after=True,
     )
     assert result["background_semantic"] and result["completed_actions"] == 1, result
     assert result["status"] == "dispatched" and result["actor_release_confirmed"], (
@@ -201,7 +211,11 @@ with subtest(
     assert (
         effect["route"] == "direct_atspi_object" and effect["exact_buffer_bytes_match"]
     ), effect
-    fresh = actor("desktop_semantic_direct", **semantic_args)
+    elapsed = 1000 * (time.perf_counter() - started)
+    machine.log(f"Action through target readback, including driver shell transport: {elapsed:.1f} ms")
+    assert effect["focus_events"] == "no_change_observed", effect
+    fresh = result["after_observation"]
+    assert fresh["niri_window_id"] == target_id, fresh
     assert fresh["elements_complete"] and any(
         e["editable"] and e["text_excerpt"] == "actorafter" for e in fresh["elements"]
     ), fresh

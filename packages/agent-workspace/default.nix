@@ -51,6 +51,7 @@ stdenv.mkDerivation {
     substituteInPlace "$dir/sandbox.py" \
       --replace-fail '@bwrap@' '${bubblewrap}/bin/bwrap' \
       --replace-fail '@slirp@' '${slirp4netns}/bin/slirp4netns' \
+      --replace-fail '@dbusConf@' '${dbus}/share/dbus-1/session.conf' \
       --replace-fail '@cert@' '${cacert}/etc/ssl/certs/ca-bundle.crt' \
       --replace-fail '@shell@' '${bash}/bin/bash' \
       --replace-fail '@env@' '${coreutils}/bin/env' \

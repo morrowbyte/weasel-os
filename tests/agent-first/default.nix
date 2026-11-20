@@ -1,7 +1,7 @@
 {
   testers,
   lib,
-  niri,
+  pkgs,
   writeShellScript,
   coreutils,
   jq,
@@ -22,14 +22,20 @@ in
 testers.runNixOSTest {
   name = "agent-first-desktop";
 
-  nodes.machine = {
+  nodes.machine = { config, ... }: {
     imports = [ ../../modules/agent-first.nix ];
     users.users.operator.isNormalUser = true;
     services.greetd = {
       enable = true;
-      settings.default_session = {
+      settings.default_session.command = "${pkgs.greetd}/bin/agreety --cmd ${pkgs.niri}/bin/niri-session";
+      settings.initial_session = {
         user = "operator";
-        command = "${niri}/bin/niri-session";
+        command = toString (
+          import ../../hosts/weasel-agent/vm-session.nix {
+            inherit pkgs;
+            niri = config.programs.niri.package;
+          }
+        );
       };
     };
     environment.systemPackages = [ jq ];

@@ -8,10 +8,10 @@
   imv,
   foot,
   nano,
+  actor ? callPackage ../computer-use { },
+  indicator ? callPackage ../computer-use-indicator { },
 }:
 let
-  actor = callPackage ../computer-use { };
-  indicator = callPackage ../computer-use-indicator { };
   workspace = callPackage ../agent-workspace { };
 in
 stdenvNoCC.mkDerivation {
