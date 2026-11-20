@@ -199,6 +199,7 @@ machine.succeed(operator(f"cat > {probe_path} <<'PYPROBE'\n{client_probe}\nPYPRO
 for backend_label, backend_path in [
     ("Codex CLI", "/run/current-system/sw/bin/codex"),
     ("ChatGPT bundled Codex", str(chatgpt_backend)),
+    ("Crew packaged Codex", "/run/current-system/sw/bin/crew-codex"),
 ]:
     with subtest(
         backend_label + " app-server reads the three real windows through system MCP"
