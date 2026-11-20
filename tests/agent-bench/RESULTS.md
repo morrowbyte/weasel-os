@@ -64,6 +64,12 @@ sowie den erhaltenen Vordergrundentwurf und Fokus.
 
 **files-v1 hat die Startbedingung bisher verfehlt.** Der Driver konnte den
 offenen GTK-Dateidialog nicht bestätigen. Es wurde kein Modellauftrag
-gestartet. Für diese Familie gibt es damit bisher keine Modellzeit, keinen
-gemessenen Dateieffekt und keine Modellstichprobe. Der VM-Besitzer prüft
-die Bereitstellung der virtuellen Eingabegeräte am privaten Wayland-Seat.
+gestartet. Im kontrollierten Gegenversuch auf dem ansonsten identischen Quick-Driver
+öffnete bereits das erste `Ctrl+O` den echten GTK-Dateidialog, nachdem Tastatur
+und Zeiger dauerhaft am privaten Wayland-Seat angekündigt wurden. Der
+VM-Besitzer meldete das frische Fixture `files-seat-probe` auf Stand
+`5020184` mit D-Bus- und Tastenalias-Korrekturen. Der erste Terra-Priority-Lauf zur
+Dateiaufgabe startete nach der Kontrolle, dass genau ein QEMU-Gast aktiv war.
+Für diesen Versuch übertrug das private Boat-Relay Bilder in Blöcken von
+8.100 statt 2.400 Bytes. Damit hat sich auch der Transportaufwand beim
+Betrachten von Bildern gegenüber den drei Dokumentversuchen geändert.
