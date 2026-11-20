@@ -18,6 +18,8 @@ nix run 'github:morrowbyte/weasel-os?ref=feature/agent-first-os#weasel-agent'
 
 Die QEMU-VM verwendet eine virtuelle Grafikausgabe. Weston stellt dafür einen Monitor mit Software-Rendering bereit, Niri verwaltet die Benutzerfenster. Für einen eigenen NixOS-Rechner lässt sich das exportierte Modul `nixosModules.agent-first` mit dessen vorhandener Hardware-, Benutzer- und Anmeldekonfiguration kombinieren.
 
+Mit **Super+D** startest du Codex CLI, ChatGPT oder Crew in deiner Niri-Sitzung. Beim ersten Start eines Desktop-Clients kann GNOME nach einem Passwort für den neuen Schlüsselbund fragen. Wähle ein eigenes Passwort für diesen Gast und bestätige es im Systemdialog. Anschließend kann der Client seine Oberfläche laden und später die Anbieteranmeldung geschützt speichern. Beim erneuten Entsperren verwendet der Gast dasselbe Schlüsselbund-Passwort.
+
 | Taste | Aktion |
 | --- | --- |
 | Super+Space | Systemaktion suchen |

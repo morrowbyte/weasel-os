@@ -1,5 +1,7 @@
 # Appended to desktop.py in the same disposable operator/Niri guest.
 from pathlib import PurePosixPath
+from secrets import choice
+from string import ascii_lowercase
 
 
 def client_layer(visible: bool) -> str:
@@ -68,18 +70,46 @@ with subtest("Codex CLI menu opens a new foot running the shipped Codex executab
         raise
     clients_seen["Codex CLI"] = codex_window
 
-with subtest("ChatGPT menu opens the desktop application"):
-    clients_seen["ChatGPT"] = launch_menu_entry(
-        "chatgpt",
-        "ChatGPT",
-        ["chatgpt", "codex", "com.openai.chat", "com.openai.codex"],
-    )
-
 with subtest("Crew menu opens the desktop application"):
     clients_seen["Crew"] = launch_menu_entry(
         "t3code-morrowbyte",
         "Crew",
         ["com.morrowbyte.t3code"],
+    )
+
+with subtest("Set up the encrypted Secret Service keyring in the fresh guest"):
+    prompt = int(machine.wait_until_succeeds(operator(
+        """niri msg --json windows | jq -er '.[] | select(.app_id == "gcr-prompter" and .is_focused) | .pid'"""
+    )))
+    executable = machine.succeed(f"readlink -f /proc/{prompt}/exe").strip()
+    assert executable.startswith("/nix/store/") and PurePosixPath(executable).name in (
+        "gcr-prompter", ".gcr-prompter-wrapped",
+    ), executable
+    # This throwaway guest has no user profile or credentials. Send the test-only
+    # passphrase to the real, focused system prompter without logging it.
+    passphrase = "".join(choice(ascii_lowercase) for _ in range(22))
+    for field in range(2):
+        if field == 1:
+            qemu_key("tab", True, False)
+        for letter in passphrase:
+            qemu_key(letter, True, False)
+    qemu_key("ret", True, False)
+    del passphrase
+    machine.wait_until_succeeds(operator(
+        """niri msg --json windows | jq -e 'all(.[]; .app_id != "gcr-prompter")'"""
+    ))
+    alias = machine.succeed(operator("busctl --user call org.freedesktop.secrets /org/freedesktop/secrets "
+                                     "org.freedesktop.Secret.Service ReadAlias s default"))
+    collection = shlex.split(alias)[1]
+    assert collection.startswith("/org/freedesktop/secrets/collection/") and not collection.endswith("/session"), alias
+    machine.succeed(operator(f"busctl --user get-property org.freedesktop.secrets {collection} "
+                             "org.freedesktop.Secret.Collection Locked | grep -Fx 'b false'"))
+
+with subtest("ChatGPT menu opens the desktop application"):
+    clients_seen["ChatGPT"] = launch_menu_entry(
+        "chatgpt",
+        "ChatGPT",
+        ["chatgpt", "codex", "com.openai.chat", "com.openai.codex"],
     )
 
 with subtest("Super+Space opens the action palette and Enter reads the window list"):
