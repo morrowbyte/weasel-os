@@ -20,6 +20,7 @@ rustPlatform.buildRustPackage {
   buildAndTestSubdir = "core";
   cargoLock.lockFile = ./core/Cargo.lock;
   env = lib.optionalAttrs agentFirstLaunch {
+    WEASEL_VM_EMPTY_WORKSPACE_LAUNCH = "1";
     WEASEL_VM_ZED = "${zed-editor}/libexec/zed-editor";
     WEASEL_VM_CHROMIUM = "${chromium}/bin/chromium";
   };

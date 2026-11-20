@@ -39,6 +39,7 @@ pub(super) fn observation(
         observation_generation: state.observation_policy.generation(),
         output: output.into(), output_geometry: geometry,
         windows: json!([window]), focused_window: None, focus_output: None,
+        empty_launch_workspace: None,
         image_width: 0, image_height: 0, image: PathBuf::new(), view_image: PathBuf::new(),
         view: Crop { x: 0, y: 0, width: 0, height: 0 },
     })

@@ -141,6 +141,7 @@ struct Observation {
     focused_window: Option<Value>,
     windows: Value,
     focus_output: Option<String>,
+    empty_launch_workspace: Option<u64>,
     image_width: u32,
     image_height: u32,
     image: PathBuf,
@@ -617,7 +618,7 @@ fn blind_target(state: &State, args: &Value) -> R<Value> {
         id: id.clone(), blind: true, blind_task: Some(args.task_id.clone()), observation_generation: state.observation_policy.generation(),
         at: Instant::now(), epoch: args.expected_epoch, input_generation: generation,
         output: output.clone(), output_geometry: geometry, focused_window: Some(target.clone()),
-        windows, focus_output: Some(output), image_width: 0, image_height: 0,
+        windows, focus_output: Some(output), empty_launch_workspace: None, image_width: 0, image_height: 0,
         image: PathBuf::new(), view: Crop { x: 0, y: 0, width: 0, height: 0 }, view_image: PathBuf::new(),
     };
     validate(state, &obs, Some(args.window_id), false)?;
@@ -1445,7 +1446,7 @@ fn preflight(obs: &Observation, action: &Action) -> R<()> {
         _ => {}
     }
     if action.launch().is_some() {
-        if obs.focus_output.as_deref() != Some(obs.output.as_str()) {
+        if !launch_target_observed(obs) {
             return Err("Launch requires the observed focused output; no spawn".into());
         }
         if let Action::EditorOpenFile { relative_path, .. } = action {
@@ -1783,13 +1784,26 @@ fn observe_inner_guarded(state: &State, args: &Value, actor_held: bool, allowed_
     };
     let data = json!({"schema":1,"observation_id":id,"epoch":epoch,"input_generation":input_generation,"input_policy":state.input_policy.status(state.last_human_ms.load(Ordering::SeqCst)),"global_keyboard":global_keyboard_capability(),"observed_unix_ms":SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis(),"monotonic_ms":state.started.elapsed().as_secs_f64()*1000.0,"monotonic_system_ms":system_monotonic_ms(),"expires_after_ms":60000,"desktop":"niri-wayland","focused_window":focus,"windows":windows,"workspaces":workspaces,"outputs":outputs,"capture":{"output":name,"path":image,"mime_type":"image/png","image_width":width,"image_height":height,"scale":1,"coordinate_frame":"output-local screenshot pixels; origin top-left; dimensions are actual PNG dimensions and may differ by rounding from Niri logical size","output_logical":geometry},"capabilities":{"capture":true,"window_focus":true,"window_close_request":close_window_capability(),"desktop_launch":launch::capability(),"pointer":"wlr_virtual_pointer_v2","keyboard":{"shortcuts":"app shortcuts: persistent canonical German evdev Wayland keyboard; keymap refreshed before every chord. key_scope=compositor or chords containing Super/meta/logo use an owned Linux uinput device so Niri compositor bindings can process them; permission/monitor/device-open failures refuse before any batch input. Device creation is a capability side effect; open/write acknowledgement is not UI success","unicode_text":{"auto":"plain clipboard for known Electron app IDs or >1000characters; wtype for shorter text in other apps","keyboard_limit_characters":1000,"max_text_utf8_bytes":65536,"electron_keyboard":"known unreliable due physical DomCode and supplementary Unicode; explicit override requires app-specific proof"}},"clipboard":{"backend":"Rust wlr-data-control helper with an owned user scope","plain_text_restore":"best effort; source ownership checked, no atomic selection CAS; skipped after cancel/takeover","rich_or_nontext_restore":"supported bounded MIME payloads including HTML, COMPOUND_TEXT and original Chromium metadata; no portal handles/password hints","rich_preserve_request":"snapshot same offer before replacement; unknown/oversized/sensitive formats refuse","ignored_transport_mimes":["SAVE_TARGETS","GTK_TEXT_BUFFER_CONTENTS"],"holder_lifetime":"separate user scope; source replacement or graphical session shutdown","potential_change_reported_on_failure":true},"semantic_tree":"desktop_semantic: read-only Cua application/PID tree; unique window inventory mapping does not attest node window scope; Cua bounds are not screenshot coordinates","takeover":"physical Alt+Escape aborts only a live queued/preparing/running action or indicator-owned task scope; idle Escape only invalidates observations. Active Escape cancels the task and drops queued work without latching control; a new task with fresh observations can operate after owned input releases. Stopped task IDs cannot reopen. Explicit takeover remains a separate persistent stop."},"timing_ms":{"capture":capture_start.elapsed().as_secs_f64()*1000.0,"observe_total":start.elapsed().as_secs_f64()*1000.0}});
     check_epoch(state, Some(epoch))?;
-    if focused(&niri_epoch(state, "windows", Some(epoch))?)
+    let final_windows = niri_epoch(state, "windows", Some(epoch))?;
+    if focused(&final_windows)
         .as_ref()
         .map(identity)
         != focus.as_ref().map(identity)
         || niri_epoch(state, "outputs", Some(epoch))?[&name]["logical"] != geometry
     {
         return Err("Desktop changed during capture; observe again".into());
+    }
+    let empty_launch_workspace = if option_env!("WEASEL_VM_EMPTY_WORKSPACE_LAUNCH").is_some()
+        && focus.is_none() {
+        empty_launch_workspace_id(&name, &windows, &workspaces)
+    } else {
+        None
+    };
+    if let Some(id) = empty_launch_workspace {
+        let final_workspaces = niri_epoch(state, "workspaces", Some(epoch))?;
+        if empty_launch_workspace_id(&name, &final_windows, &final_workspaces) != Some(id) {
+            return Err("Empty launch workspace changed during capture; observe again".into());
+        }
     }
     let focus_output = focus
         .as_ref()
@@ -1815,6 +1829,7 @@ fn observe_inner_guarded(state: &State, args: &Value, actor_held: bool, allowed_
         focused_window: focus,
         windows: windows.clone(),
         focus_output,
+        empty_launch_workspace,
         image_width: width,
         image_height: height,
         image: image.clone(),
@@ -2322,10 +2337,61 @@ fn validate_background_semantic_inventory(obs: &Observation, target: &Value,
     Ok(())
 }
 
+// Niri can focus a workspace without focusing any toplevel. Its stable ID
+// distinguishes two successive empty workspaces on the same output.
+fn empty_launch_workspace_id(output: &str, windows: &Value, workspaces: &Value) -> Option<u64> {
+    let workspaces = workspaces.as_array()?;
+    let mut selected = None;
+    for workspace in workspaces {
+        let id = workspace["id"].as_u64()?;
+        let focused = workspace["is_focused"].as_bool()?;
+        let workspace_output = workspace["output"].as_str()?;
+        let active_on_output = workspace["is_active"].as_bool()? && workspace_output == output;
+        // Exactly one workspace must satisfy both facts. Active workspaces
+        // on other outputs can remain visible while this output has focus.
+        if focused != active_on_output {
+            return None;
+        }
+        if focused {
+            if selected.is_some() || workspace.get("active_window_id") != Some(&Value::Null) {
+                return None;
+            }
+            selected = Some(id);
+        }
+    }
+    let id = selected?;
+    if workspaces.iter().filter(|w| w["id"].as_u64() == Some(id)).count() != 1 {
+        return None;
+    }
+    for window in windows.as_array()? {
+        if window["is_focused"].as_bool()? || window["workspace_id"].as_u64()? == id {
+            return None;
+        }
+    }
+    Some(id)
+}
+
+fn launch_target_observed(obs: &Observation) -> bool {
+    match obs.focused_window {
+        Some(_) => obs.focus_output.as_deref() == Some(obs.output.as_str()),
+        None => obs.empty_launch_workspace.is_some(),
+    }
+}
+
 fn validate_launch_inventory(obs: &Observation, windows: &Value, workspaces: &Value, outputs: &Value) -> R<()> {
-    if obs.focus_output.as_deref() != Some(obs.output.as_str())
+    if !launch_target_observed(obs)
         || focused(windows).as_ref().map(identity) != obs.focused_window.as_ref().map(identity) {
         return Err("Launch focus identity/output changed; no spawn, reobserve".into());
+    }
+    if outputs[&obs.output]["logical"] != obs.output_geometry || !obs.output_geometry.is_object() {
+        return Err("Launch output geometry changed; no spawn".into());
+    }
+    if let Some(id) = obs.empty_launch_workspace {
+        return if empty_launch_workspace_id(&obs.output, windows, workspaces) == Some(id) {
+            Ok(())
+        } else {
+            Err("Launch empty workspace identity/output changed; no spawn, reobserve".into())
+        };
     }
     let focused_workspaces = workspaces.as_array().ok_or("Launch workspace inventory unavailable")?
         .iter().filter(|w| w["is_focused"] == true).collect::<Vec<_>>();
@@ -2334,8 +2400,7 @@ fn validate_launch_inventory(obs: &Observation, windows: &Value, workspaces: &Va
     let expected_window = obs.focused_window.as_ref().and_then(|w| w["id"].as_u64());
     if workspace["output"].as_str() != Some(obs.output.as_str()) || workspace["is_active"] != true
         || workspace["active_window_id"].as_u64() != expected_window
-        || obs.focused_window.as_ref().is_some_and(|w| w["workspace_id"] != workspace["id"])
-        || outputs[&obs.output]["logical"] != obs.output_geometry || !obs.output_geometry.is_object() {
+        || obs.focused_window.as_ref().is_some_and(|w| w["workspace_id"] != workspace["id"]) {
         return Err("Launch observed active workspace/output geometry changed; no spawn".into());
     }
     Ok(())
@@ -5218,6 +5283,7 @@ mod regression {
             focused_window: None,
             windows: json!([]),
             focus_output: None,
+            empty_launch_workspace: None,
             image_width: 100,
             image_height: 100,
             image: dir.join("unused.png"),
@@ -5347,6 +5413,13 @@ mod regression {
         assert!(state.capture_available.load(Ordering::SeqCst));
         assert_eq!(recovered_data["epoch"], 3);
         assert_eq!(state.observations.lock().unwrap().len(), 1);
+        {
+            let retained = state.observations.lock().unwrap();
+            let observed = &retained[recovered_data["observation_id"].as_str().unwrap()];
+            assert!(observed.focus_output.is_none());
+            let launch = Action::LaunchApp { app: launch::App::Chrome };
+            assert_eq!(preflight(observed, &launch).is_ok(), option_env!("WEASEL_VM_EMPTY_WORKSPACE_LAUNCH").is_some());
+        }
         let waited=act(&state,&json!({"observation_id":recovered_data["observation_id"],"observe_after":false,"actions":[{"kind":"wait","ms":1}]}),3).unwrap();
         assert_eq!(waited["isError"], false);
         env::set_var("PATH", &old_path);
@@ -5859,6 +5932,7 @@ mod release_recovery_tests {
             focused_window: None,
             windows: json!([]),
             focus_output: None,
+            empty_launch_workspace: None,
             image_width: 1,
             image_height: 1,
             image: dir.join("never-read.png"),
@@ -8663,6 +8737,54 @@ mod launch_contract_tests {
                 || Ok((windows.clone(), workspaces.clone(), outputs.clone()))).unwrap();
             fs::remove_dir_all(dir).unwrap();
         }
+    }
+    #[test]
+    fn empty_workspace_launch_rechecks_exact_workspace_at_spawn() {
+        let (state, dir, mut captured, windows, mut workspaces, outputs) = fixture("empty-workspace");
+        let windows = json!([windows[1]]);
+        workspaces[0]["active_window_id"] = Value::Null;
+        captured.focused_window = None;
+        captured.focus_output = None;
+        captured.windows = windows.clone();
+        captured.empty_launch_workspace = empty_launch_workspace_id(&captured.output, &windows, &workspaces);
+        assert_eq!(captured.empty_launch_workspace, Some(33));
+        state.observations.lock().unwrap().insert(captured.id.clone(), captured.clone());
+        preflight(&captured, &Action::LaunchApp { app: launch::App::Zed }).unwrap();
+
+        for change in ["none", "same-output switch", "output switch", "no focus", "two focused",
+            "two active", "duplicate ID", "missing active window field", "new window", "window elsewhere focused", "geometry"] {
+            let mut live_windows = windows.clone();
+            let mut live_spaces = workspaces.clone();
+            let mut live_outputs = outputs.clone();
+            match change {
+                "none" => {}
+                "same-output switch" => live_spaces[0]["id"] = json!(34),
+                "output switch" => live_spaces[0]["output"] = json!("DP-5"),
+                "no focus" => live_spaces[0]["is_focused"] = json!(false),
+                "two focused" => live_spaces[1]["is_focused"] = json!(true),
+                "two active" => live_spaces[1]["output"] = json!("DP-6"),
+                "duplicate ID" => live_spaces[1]["id"] = json!(33),
+                "missing active window field" => { live_spaces[0].as_object_mut().unwrap().remove("active_window_id"); }
+                "new window" => live_windows[0]["workspace_id"] = json!(33),
+                "window elsewhere focused" => live_windows[0]["is_focused"] = json!(true),
+                "geometry" => live_outputs["DP-6"]["logical"]["width"] = json!(801),
+                _ => unreachable!(),
+            }
+            let mut first = true;
+            let mut receipt = launch::Receipt::default();
+            let result = launch::dispatch(&mut receipt, || {
+                validate_launch_state_with_inventory(&state, &captured, 77, || {
+                    if std::mem::take(&mut first) {
+                        Ok((windows.clone(), workspaces.clone(), outputs.clone()))
+                    } else {
+                        Ok((live_windows.clone(), live_spaces.clone(), live_outputs.clone()))
+                    }
+                })
+            }, |gate, receipt| { gate()?; receipt.commit(123); Ok(()) });
+            assert_eq!(result.is_ok(), change == "none", "{change}");
+            assert_eq!(receipt.spawn_committed, change == "none", "{change}");
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn closed_shapes_reject_foreign_apps_projects_arguments_and_mixed_batches() {
