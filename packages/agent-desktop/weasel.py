@@ -20,6 +20,7 @@ FOCUS_LABELS = {
     "private-only": "Private Arbeitsfläche",
 }
 FIELD_LABELS = {
+    "if_sha256": "Hash der vorherigen Aufnahme",
     "window_id": "Fenster", "workspace_id": "Arbeitsfläche", "label": "Feldbeschriftung",
     "expected_text": "Erwarteter Feldinhalt", "text": "Text", "app": "Programm",
     "name": "Name der privaten Arbeitsfläche", "exchange": "Austauschordner (optional)",
@@ -85,6 +86,8 @@ def action_label(spec):
 async def pick_args(spec):
     args = {}
     for key, field in spec["inputSchema"]["properties"].items():
+        if key == "if_sha256":
+            continue  # The interactive viewer always requests a full frame.
         label = FIELD_LABELS[key]
         if key in ("window_id", "workspace_id"):
             args[key] = await pick_id(key)

@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import re
@@ -106,11 +107,15 @@ async def private(action, args, images):
             data = path.read_bytes()
             if not data.startswith(b"\x89PNG\r\n\x1a\n") or len(data) > 5 << 20:
                 raise ActionError("Ungültiges privates PNG")
+            digest = hashlib.sha256(data).hexdigest()
+            frame = {"workspace": name, "sha256": digest, "unchanged": digest == args.get("if_sha256")}
+            if frame["unchanged"]:
+                return frame
             if sum(len(image["data"]) for image in images) + (len(data) + 2) // 3 * 4 > 12 << 20:
                 raise ActionError("Bildbudget der Sequenz erreicht")
             images.append({"type": "image", "mimeType": "image/png",
                            "data": base64.b64encode(data).decode()})
-            return {"workspace": name, "image_index": len(images) - 1}
+            return {**frame, "image_index": len(images) - 1}
     if operation != "editor":
         raise ValueError(f"Unbekannte private Aktion: {action}")
     editor = os.environ.get("WEASEL_PRIVATE_EDITOR")

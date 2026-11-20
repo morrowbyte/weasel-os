@@ -145,6 +145,17 @@ with subtest(
 ):
     result = workspace("start", "--exchange", exchange)
     assert result["running"] and result["network"] is False, result
+    def frame(previous: str = "") -> dict:
+        args = json.dumps({"name": "integration", "if_sha256": previous})
+        cmd = shlex.join(["weasel", "run", "private_screenshot", args])
+        return json.loads(machine.succeed(operator(cmd + """ | jq -ec '{
+            receipt:.steps[0].result,images:(.images // [] | length)}'""")))
+
+    blank = frame()
+    assert blank["images"] == 1 and blank["receipt"]["unchanged"] is False
+    previous_hash = blank["receipt"]["sha256"]
+    same = frame(previous_hash)
+    assert same["images"] == 0 and same["receipt"]["unchanged"] is True
     # The only shared directory is a fresh, explicit test exchange.
     machine.succeed(operator(f"printf 'seed\\n' > {exchange}/private-target.txt"))
     workspace(
@@ -178,6 +189,8 @@ with subtest(
     finally:
         qemu_key("shift", False)
     workspace("screenshot", f"{home}/private-mousepad.png")
+    changed = frame(previous_hash)
+    assert changed["images"] == 1 and changed["receipt"]["sha256"] != previous_hash
     workspace("stop")
     assert workspace("status")["running"] is False
     finish_draft("private", "draftAB")
