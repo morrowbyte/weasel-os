@@ -32,7 +32,9 @@ def verify_viewer_pointer() -> None:
             "magick", str(shot), "-fuzz", "10%", "-fill", "black", "+opaque", color,
             "-fill", "white", "-opaque", color, "-format", "%@", "info:",
         ], text=True)
-        return tuple(map(int, re.fullmatch(r"(\d+)x(\d+)\+(\d+)\+(\d+)", geometry).groups()))
+        box = re.fullmatch(r"(\d+)x(\d+)\+(\d+)\+(\d+)", geometry)
+        assert box, (color, geometry)
+        return tuple(map(int, box.groups()))
 
     def click(x, y, width, height):
         assert 0 <= x < width and 0 <= y < height
@@ -53,13 +55,19 @@ def verify_viewer_pointer() -> None:
     workspaces = json.loads(run("niri", "msg", "--json", "workspaces"))
     original, = [w for w in workspaces if w["is_focused"]]
     empty = next(w for w in workspaces if w["output"] == original["output"] and w["active_window_id"] is None)
-    mice = qmp.send("query-mice")["return"]
+    def devices() -> list[dict]:
+        # QMPSession.send annotates all values as strings; query-mice returns a JSON list.
+        result: object = qmp.send("query-mice")["return"]
+        assert isinstance(result, list) and all(isinstance(m, dict) for m in result), result
+        return result
+
+    mice = devices()
     previous, = [m for m in mice if m["current"]]
     tablet, = [m for m in mice if m["absolute"] and "tablet" in m["name"].lower()]
     run(*cli, "start", "--exchange", root)
     try:
         machine.send_monitor_command(f"mouse_set {tablet['index']}")
-        assert any(m["index"] == tablet["index"] and m["current"] for m in qmp.send("query-mice")["return"])
+        assert any(m["index"] == tablet["index"] and m["current"] for m in devices())
         run("niri", "msg", "action", "focus-workspace", str(empty["idx"]))
         wait_for("niri msg --json workspaces | jq -e " + shlex.quote(f".[] | select(.is_focused and .id == {empty['id']})"))
         initial = "\n" * 6 + "M" * 30 + "\n"
