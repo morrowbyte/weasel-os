@@ -956,6 +956,7 @@ dependencies = [
 name = "weasel-computer-use-atspi"
 version = "0.1.0"
 dependencies = [
+ "futures-lite",
  "serde",
  "serde_json",
  "zbus",

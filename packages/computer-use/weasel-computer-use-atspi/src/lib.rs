@@ -1,15 +1,17 @@
 //! Direct AT-SPI object identity prototype, compile-only until live acceptance.
 //! Protocol: GNOME at-spi2-core XML Accessible/Action/EditableText interfaces.
 //! There is no coordinate, index-token, input, or insertion fallback.
-use serde::{Deserialize, Serialize};
+use futures_lite::future::{block_on, zip};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::HashSet,
+    future::Future,
     time::{Duration, Instant},
 };
 use zbus::{
     blocking::{connection::Builder, Connection},
-    zvariant::{OwnedObjectPath, OwnedValue},
+    zvariant::{OwnedObjectPath, OwnedValue, Type},
 };
 type R<T> = Result<T, String>;
 const ACCESSIBLE: &str = "org.a11y.atspi.Accessible";
@@ -180,32 +182,40 @@ fn connection() -> R<Connection> {
         .build()
         .map_err(|e| e.to_string())
 }
-fn property(conn: &Connection, obj: &Object, name: &str) -> R<OwnedValue> {
-    // Explicit Get avoids GetAll/property-cache crashes in legacy Qt bridges.
+async fn accessible_method<T: DeserializeOwned + Type>(
+    conn: &zbus::Connection,
+    obj: &Object,
+    method: &str,
+) -> R<T> {
     conn.call_method(
         Some(obj.bus.as_str()),
         obj.path.as_str(),
-        Some("org.freedesktop.DBus.Properties"),
-        "Get",
-        &(ACCESSIBLE, name),
+        Some(ACCESSIBLE),
+        method,
+        &(),
     )
+    .await
     .map_err(|e| e.to_string())?
     .body()
     .deserialize()
     .map_err(|e| e.to_string())
 }
-fn string_call(conn: &Connection, obj: &Object, interface: &str, method: &str) -> R<String> {
-    conn.call_method(
-        Some(obj.bus.as_str()),
-        obj.path.as_str(),
-        Some(interface),
-        method,
-        &(),
-    )
-    .map_err(|e| e.to_string())?
-    .body()
-    .deserialize()
-    .map_err(|e| e.to_string())
+async fn label_property(conn: &zbus::Connection, obj: &Object, name: &str) -> R<String> {
+    // Explicit Get avoids GetAll/property-cache crashes in legacy Qt bridges.
+    let value: OwnedValue = conn
+        .call_method(
+            Some(obj.bus.as_str()),
+            obj.path.as_str(),
+            Some("org.freedesktop.DBus.Properties"),
+            "Get",
+            &(ACCESSIBLE, name),
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        .body()
+        .deserialize()
+        .map_err(|e| e.to_string())?;
+    String::try_from(value).map_err(|e| e.to_string())
 }
 fn owner_pid(conn: &Connection, bus: &str) -> R<u32> {
     conn.call_method(
@@ -265,18 +275,10 @@ fn state(states: &[u32], bit: usize) -> bool {
         .is_some_and(|v| v & (1 << (bit % 32)) != 0)
 }
 fn node_states(conn: &Connection, object: &Object) -> R<Vec<u32>> {
-    let states: Vec<u32> = conn
-        .call_method(
-            Some(object.bus.as_str()),
-            object.path.as_str(),
-            Some(ACCESSIBLE),
-            "GetState",
-            &(),
-        )
-        .map_err(|e| e.to_string())?
-        .body()
-        .deserialize()
-        .map_err(|e| e.to_string())?;
+    block_on(accessible_states(conn.inner(), object))
+}
+async fn accessible_states(conn: &zbus::Connection, object: &Object) -> R<Vec<u32>> {
+    let states: Vec<u32> = accessible_method(conn, object, "GetState").await?;
     if states.is_empty() {
         return Err("AT-SPI GetState returned no state words; visibility unknown".into());
     }
@@ -612,49 +614,97 @@ fn add_selection_readback(
     }
 }
 
-fn read_node(conn: &Connection, object: Object, parent: Option<Object>, depth: usize) -> R<Node> {
-    let role_id: u32 = conn
-        .call_method(
-            Some(object.bus.as_str()),
-            object.path.as_str(),
-            Some(ACCESSIBLE),
-            "GetRole",
-            &(),
-        )
-        .map_err(|e| e.to_string())?
-        .body()
-        .deserialize()
-        .map_err(|e| e.to_string())?;
-    let role = string_call(conn, &object, ACCESSIBLE, "GetRoleName")?;
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NodePurpose {
+    WindowDiscovery,
+    SnapshotOrValidation,
+}
+
+struct NodeMetadata {
+    role_id: u32,
+    role: String,
+    protected: bool,
+    name: String,
+    description: String,
+    interfaces: Vec<String>,
+    states: Vec<u32>,
+}
+
+// Drain both replies (or their connection timeouts) even if one fails. A failed
+// node does not leave a group of pending reads for the next traversal node.
+async fn read_pair<A, B>(
+    first: impl Future<Output = R<A>>,
+    second: impl Future<Output = R<B>>,
+) -> R<(A, B)> {
+    let (a, b) = zip(first, second).await;
+    Ok((a?, b?))
+}
+
+async fn node_metadata<F: Future<Output = R<String>>>(
+    purpose: NodePurpose,
+    roles: impl Future<Output = R<(u32, String)>>,
+    structure: impl Future<Output = R<(Vec<String>, Vec<u32>)>>,
+    get_label: impl Fn(&'static str) -> F,
+) -> R<NodeMetadata> {
+    // Both role replies must succeed before constructing any content request.
+    let (role_id, role) = roles.await?;
     let protected = role_id == 40 || role.to_lowercase().contains("password");
-    let name = if protected {
-        "[protected field]".into()
-    } else {
-        String::try_from(property(conn, &object, "Name")?).map_err(|e| e.to_string())?
+    let labels = async {
+        if protected {
+            return Ok(("[protected field]".into(), "[protected field]".into()));
+        }
+        // Description is optional even on bridges that reject this property.
+        // Window discovery only compares Name. The selected root is read again.
+        let description = async {
+            if purpose == NodePurpose::WindowDiscovery {
+                return Ok(String::new());
+            }
+            Ok(get_label("Description").await.unwrap_or_default())
+        };
+        read_pair(get_label("Name"), description).await
     };
-    // GTK icon-only toolbar buttons often keep Name empty and expose the
-    // human-facing tooltip through Description. Protected fields stay redacted.
-    let description = if protected {
-        "[protected field]".into()
-    } else {
-        property(conn, &object, "Description")
-            .ok()
-            .and_then(|value| String::try_from(value).ok())
-            .unwrap_or_default()
-    };
-    let interfaces: Vec<String> = conn
-        .call_method(
-            Some(object.bus.as_str()),
-            object.path.as_str(),
-            Some(ACCESSIBLE),
-            "GetInterfaces",
-            &(),
-        )
-        .map_err(|e| e.to_string())?
-        .body()
-        .deserialize()
-        .map_err(|e| e.to_string())?;
-    let states = node_states(conn, &object)?;
+    let ((name, description), (interfaces, states)) = read_pair(labels, structure).await?;
+    Ok(NodeMetadata {
+        role_id,
+        role,
+        protected,
+        name,
+        description,
+        interfaces,
+        states,
+    })
+}
+
+fn read_node(
+    conn: &Connection,
+    object: Object,
+    parent: Option<Object>,
+    depth: usize,
+    purpose: NodePurpose,
+) -> R<Node> {
+    // One unique owner, path and connection. Only the current object's reads
+    // overlap. No traversal, authority check or input crosses the batch.
+    let bus = conn.inner();
+    let NodeMetadata {
+        role_id,
+        role,
+        protected,
+        name,
+        description,
+        interfaces,
+        states,
+    } = block_on(node_metadata(
+        purpose,
+        read_pair(
+            accessible_method(bus, &object, "GetRole"),
+            accessible_method(bus, &object, "GetRoleName"),
+        ),
+        read_pair(
+            accessible_method(bus, &object, "GetInterfaces"),
+            accessible_states(bus, &object),
+        ),
+        |name| label_property(bus, &object, name),
+    ))?;
     let action_names = if !protected && interfaces.iter().any(|s| s == ACTION) {
         action_names(conn, &object)?
     } else {
@@ -859,7 +909,13 @@ fn observe(
             discovery_complete = false;
             break;
         }
-        match read_node(conn, obj, Some(application.clone()), 0) {
+        match read_node(
+            conn,
+            obj,
+            Some(application.clone()),
+            0,
+            NodePurpose::WindowDiscovery,
+        ) {
             Ok(node) => {
                 if is_window(&node) {
                     windows.push(node);
@@ -884,7 +940,15 @@ fn observe(
         application.clone(),
         max_nodes,
         max_depth,
-        |object, parent, depth| read_node(conn, object, parent, depth),
+        |object, parent, depth| {
+            read_node(
+                conn,
+                object,
+                parent,
+                depth,
+                NodePurpose::SnapshotOrValidation,
+            )
+        },
         |object| children(conn, object),
         |object| node_states(conn, object),
         || started.elapsed() > OBSERVE_DEADLINE,
@@ -954,7 +1018,13 @@ fn revalidate(
     if prior.protected {
         return Err("Protected fields are not editable by this adapter".into());
     }
-    let mut current = read_node(conn, object.clone(), prior.parent.clone(), prior.depth)?;
+    let mut current = read_node(
+        conn,
+        object.clone(),
+        prior.parent.clone(),
+        prior.depth,
+        NodePurpose::SnapshotOrValidation,
+    )?;
     if current.protected {
         return Err("Current target is a protected field; mutation refused".into());
     }
@@ -996,7 +1066,13 @@ fn revalidate(
             .find(|n| &n.object == parent)
             .ok_or("Observed parent identity unavailable")?;
         ancestors.insert(chain.object.clone());
-        let fresh_parent = read_node(conn, parent.clone(), chain.parent.clone(), chain.depth)?;
+        let fresh_parent = read_node(
+            conn,
+            parent.clone(),
+            chain.parent.clone(),
+            chain.depth,
+            NodePurpose::SnapshotOrValidation,
+        )?;
         if (
             fresh_parent.role_id,
             &fresh_parent.name,
@@ -1631,6 +1707,99 @@ mod visible_scope_tests {
 #[cfg(test)]
 mod bounded_bridge_read_tests {
     use super::*;
+    #[test]
+    fn metadata_waits_for_both_roles_before_requesting_labels() {
+        use futures_lite::future::{ready, yield_now};
+
+        for roles in [
+            Ok((40, "text".into())),
+            Ok((1, "Password entry".into())),
+            Err("role unavailable".into()),
+        ] {
+            let failed = roles.is_err();
+            let result = block_on(node_metadata(
+                NodePurpose::SnapshotOrValidation,
+                async {
+                    yield_now().await;
+                    roles
+                },
+                ready(Ok((Vec::new(), vec![1]))),
+                |field| -> std::future::Ready<R<String>> {
+                    panic!("requested protected or unclassified {field}")
+                },
+            ));
+            if failed {
+                assert!(result.is_err());
+            } else {
+                let meta = result.unwrap();
+                assert!(meta.protected);
+                assert_eq!(meta.name, "[protected field]");
+                assert_eq!(meta.description, "[protected field]");
+            }
+        }
+    }
+
+    #[test]
+    fn metadata_overlaps_independent_reads_and_keeps_required_errors() {
+        use futures_lite::future::{ready, yield_now};
+        use std::cell::Cell;
+
+        for (purpose, name_fails, structure_fails) in [
+            (NodePurpose::WindowDiscovery, false, false),
+            (NodePurpose::SnapshotOrValidation, false, false),
+            (NodePurpose::SnapshotOrValidation, true, false),
+            (NodePurpose::SnapshotOrValidation, false, true),
+        ] {
+            let structure_started = Cell::new(false);
+            let description_read = Cell::new(false);
+            let name_finished = Cell::new(false);
+            let result = block_on(node_metadata(
+                purpose,
+                ready(Ok((1, "frame".into()))),
+                async {
+                    structure_started.set(true);
+                    if structure_fails {
+                        Err("invalid state".into())
+                    } else {
+                        Ok((Vec::new(), vec![1]))
+                    }
+                },
+                |field| {
+                    let structure_started = &structure_started;
+                    let name_finished = &name_finished;
+                    let description_read = &description_read;
+                    async move {
+                        if field == "Description" {
+                            description_read.set(true);
+                            return Err("unsupported description".into());
+                        }
+                        assert_eq!(field, "Name");
+                        yield_now().await;
+                        assert!(structure_started.get());
+                        assert_eq!(
+                            description_read.get(),
+                            purpose != NodePurpose::WindowDiscovery
+                        );
+                        name_finished.set(true);
+                        if name_fails {
+                            Err("required name".into())
+                        } else {
+                            Ok("editor".into())
+                        }
+                    }
+                },
+            ));
+            assert!(name_finished.get());
+            if name_fails || structure_fails {
+                assert!(result.is_err());
+            } else {
+                let meta = result.unwrap();
+                assert_eq!(meta.name, "editor");
+                assert!(meta.description.is_empty());
+            }
+        }
+    }
+
     #[test]
     fn individual_machine_action_names_are_authoritative() {
         let names =

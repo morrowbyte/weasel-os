@@ -392,6 +392,13 @@ Report external wall time separately. With a Niri socket, each background
 inventory query opens a private, short-lived connection and asks for fresh data.
 Target preflight and dispatch still see independent replies.
 
+For the AT-SPI helper, compare `revalidation_ms` and `atspi_reported` on the
+same window with the same element count. Per object, the helper awaits both role
+replies before reading labels. It then overlaps at most four individual reads on
+that object's connection. The bridge receives individual property names. Window
+discovery omits the optional description and the snapshot reads it at the selected
+root. Action enumeration and text reads keep their before/after count checks.
+
 #### Pixel-only windows
 
 The project pins Niri 26.04. Its [screenshot by window ID](https://github.com/niri-wm/niri/blob/8ed0da44d974c32c6877d2f4630c314da0717ecb/src/input/mod.rs#L764-L786)
