@@ -68,6 +68,38 @@ static void failed(VncDisplay *display, const char *message, View *view)
     view->status = 1;
 }
 
+static gboolean position_before_button(GtkWidget *widget, GdkEvent *event, gpointer data)
+{
+    View *view = data;
+    if (event->type != GDK_BUTTON_PRESS && event->type != GDK_BUTTON_RELEASE &&
+        event->type != GDK_SCROLL)
+        return FALSE;
+    if (!view->initialized || vnc_display_get_read_only(view->display) ||
+        !vnc_display_is_pointer_absolute(view->display))
+        return FALSE;
+
+    /* GTK-VNC 1.5 sends button and wheel packets at the last motion position.
+     * Wayland can deliver enter and press without a motion in between. Feed
+     * the real event position through the widget's normal absolute transform
+     * before its button handler runs, retaining its current button mask. */
+    GdkEventMotion position = { .type = GDK_MOTION_NOTIFY, .window = event->any.window };
+    if (!gdk_event_get_coords(event, &position.x, &position.y))
+        return FALSE;
+    GdkWindow *window = gtk_widget_get_window(widget);
+    const int width = gdk_window_get_width(window);
+    const int height = gdk_window_get_height(window);
+    const int fb_width = vnc_display_get_width(view->display);
+    const int fb_height = vnc_display_get_height(view->display);
+    if (width < 1 || height < 1 || fb_width < 1 || fb_height < 1)
+        return TRUE;
+    /* An implicit grab can deliver a drag release outside the image. Cap its
+     * coordinates within the final framebuffer pixel before caching them. */
+    position.x = CLAMP(position.x, 0.0, width - 0.5 * width / fb_width);
+    position.y = CLAMP(position.y, 0.0, height - 0.5 * height / fb_height);
+    GTK_WIDGET_GET_CLASS(widget)->motion_notify_event(widget, &position);
+    return FALSE;
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 4)
@@ -113,6 +145,7 @@ int main(int argc, char **argv)
     g_signal_connect_swapped(view.display, "vnc-initialized", G_CALLBACK(initialized), &view);
     g_signal_connect_swapped(view.display, "vnc-disconnected", G_CALLBACK(gtk_main_quit), NULL);
     g_signal_connect(view.display, "vnc-error", G_CALLBACK(failed), &view);
+    g_signal_connect(view.display, "event", G_CALLBACK(position_before_button), &view);
     if (!vnc_display_open_fd(view.display, stream))
         return 1;
     gtk_widget_show_all(GTK_WIDGET(view.window));
