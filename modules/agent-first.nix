@@ -77,6 +77,7 @@ in
     };
   };
   environment.etc."codex/skills/weasel-desktop/SKILL.md".source = ../skills/weasel-desktop/SKILL.md;
+  environment.etc."codex/skills/weasel-desktop/SKILL.md".mode = "0444";
   systemd.user.services = {
     weasel-computer-use = sessionService // {
       description = "Weasel desktop actor for the active Niri session";
