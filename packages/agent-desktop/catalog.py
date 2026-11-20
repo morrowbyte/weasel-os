@@ -67,7 +67,7 @@ CATALOG = {
     "private_open": private("Programm auf privater Arbeitsfläche öffnen",
                             program=string(4096, description="Befehl im PATH oder Pfad zu einem Nix-Store-Programm."),
                             argv={**ARGV, "description": 'Ein Argument pro Listeneintrag, z. B. ["--option", "zwei Worte"].'},
-                            wait_window=string(255, description="Exakte Wayland-App-ID eines neuen fokussierten Fensters.")),
+                            wait_window=string(255, description="Exakte Wayland-App-ID oder X11-Klasse (WM_CLASS) eines neuen fokussierten Fensters.")),
     "private_text": private("Text ins private Fenster schreiben", text=string(8192)),
     "private_key": private("Taste im privaten Fenster senden", key=string(64)),
     "private_click": private("Privat klicken", x=X, y=Y, button=choice("left", "middle", "right")),
@@ -128,7 +128,7 @@ def validate(action_id, args):
             raise ValueError("Quell- und Zielname müssen verschieden sein")
     if action_id == "private_open":
         if len(result["wait_window"].encode()) > 255:
-            raise ValueError("private_open: Wayland-App-ID höchstens 255 UTF-8-Bytes")
+            raise ValueError("private_open: Fensterkennung höchstens 255 UTF-8-Bytes")
         batch = [["open", result["program"], *result["argv"]], ["wait-window", result["wait_window"]]]
         if len(json.dumps(batch)) > 64 << 10:
             raise ValueError("private_open: Workspace-Auftrag überschreitet 64 KiB")

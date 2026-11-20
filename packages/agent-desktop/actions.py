@@ -72,8 +72,8 @@ async def open_private(name, args):
         raise ActionError("Private Arbeitsfläche zuerst starten", before)
     windows = before["windows"]
     if any(window["app_id"] == app_id for window in windows):
-        raise ActionError("Diese Wayland-App-ID ist schon geöffnet. "
-                          "Eine eigene App-ID oder eine andere private Sitzung verwenden.", before)
+        raise ActionError("Diese Fensterkennung ist schon geöffnet. "
+                          "Eine eigene Fensterkennung oder eine andere private Sitzung verwenden.", before)
 
     job = uuid.uuid4().hex
     batch = [["open", args["program"], *args["argv"]], ["wait-window", app_id]]

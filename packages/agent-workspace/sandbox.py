@@ -70,9 +70,10 @@ def sandbox_args(gate_dir, exchange, network):
         "SHELL": "@shell@", "PATH": "@path@", "LANG": "C.UTF-8", "TMPDIR": "/tmp",
         "XDG_RUNTIME_DIR": "/run/workspace", "XDG_SESSION_TYPE": "wayland",
         "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/workspace/bus",
-        "GDK_BACKEND": "wayland", "QT_QPA_PLATFORM": "wayland", "MOZ_ENABLE_WAYLAND": "1",
+        "GDK_BACKEND": "wayland,x11", "QT_QPA_PLATFORM": "wayland;xcb", "MOZ_ENABLE_WAYLAND": "1",
         "NIXOS_OZONE_WL": "1", "ELECTRON_OZONE_PLATFORM_HINT": "wayland",
         "WLR_BACKENDS": "headless", "WLR_HEADLESS_OUTPUTS": "1", "WLR_RENDERER": "pixman",
+        "WLR_XWAYLAND": "@xwayland@",
         "FONTCONFIG_FILE": "/etc/fonts/fonts.conf", "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt",
     }
     for key, value in env.items():

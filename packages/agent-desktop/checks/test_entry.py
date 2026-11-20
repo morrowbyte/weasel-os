@@ -93,7 +93,7 @@ class Entry(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(validate("private_open", args)["argv"], ["--app-id=report", "two words", ""])
             self.assertEqual([entry.args[0] for entry in prompt.await_args_list],
                              ["Name der privaten Arbeitsfläche [default]", "Ausführbares Programm",
-                              "Argumente als JSON-Liste (optional)", "Exakte Wayland-App-ID des neuen Fensters"])
+                              "Argumente als JSON-Liste (optional)", "Wayland-App-ID oder X11-Klasse des neuen Fensters"])
         for invalid in ("--app-id=report", ["valid", 5], ["contains\0NUL"]):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "argv"):
                 validate("private_open", {**args, "argv": invalid})

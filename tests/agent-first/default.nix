@@ -11,7 +11,7 @@ let
   # draft has actually arrived through foot's terminal input.
   draft = writeShellScript "foreground-draft" ''
     set -eu
-    for phase in private actor pixels; do
+    for phase in private actor legacy pixels; do
       IFS= read -r line
       printf '%s\n' "$line" > "$HOME/draft-$phase.txt"
       printf '\033]2;draft-%s-complete\007' "$phase"
@@ -50,6 +50,7 @@ testers.runNixOSTest {
     environment.systemPackages = [
       jq
       pkgs.imagemagick
+      pkgs.xterm
       (pkgs.callPackage ../../packages/agent-clients { })
     ];
     virtualisation = {
@@ -65,6 +66,8 @@ testers.runNixOSTest {
 
   testScript =
     lib.replaceStrings [ "@draft@" ] [ "${draft}" ] (builtins.readFile ./desktop.py)
+    + "\n"
+    + lib.replaceStrings [ "@xterm@" ] [ "${pkgs.xterm}/bin/xterm" ] (builtins.readFile ./legacy-app.py)
     + "\n"
     + builtins.readFile ./pixels.py
     + "\n"

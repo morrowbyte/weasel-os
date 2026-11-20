@@ -15,6 +15,7 @@
   slirp4netns,
   cacert,
   sway-unwrapped,
+  xwayland,
   dbus,
   grim,
   wtype,
@@ -80,6 +81,7 @@ stdenv.mkDerivation {
     substituteInPlace "$dir/sandbox.py" \
       --replace-fail '@bwrap@' '${bubblewrap}/bin/bwrap' \
       --replace-fail '@slirp@' '${slirp4netns}/bin/slirp4netns' \
+      --replace-fail '@xwayland@' '${xwayland}/bin/Xwayland' \
       --replace-fail '@cert@' '${cacert}/etc/ssl/certs/ca-bundle.crt' \
       --replace-fail '@shell@' '${bash}/bin/bash' \
       --replace-fail '@env@' '${coreutils}/bin/env' \

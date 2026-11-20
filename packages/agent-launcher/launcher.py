@@ -109,7 +109,7 @@ def new_workspace(program, entry, bindir, data):
     workspace(name, "start")
     failure_id = "weasel-launch-error-" + uuid.uuid4().hex
     workspace(name, "open", "--", "launch-desktop-entry", entry, bindir, data, failure_id)
-    # open acknowledges spawning the helper. Only a mapped native window
+    # open acknowledges spawning the helper. Only a mapped private window
     # confirms that GIO and the application completed their part of the launch.
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
@@ -118,7 +118,7 @@ def new_workspace(program, entry, bindir, data):
             print(f"{name}: Start unterbrochen.", file=sys.stderr)
             return None
         windows = state["windows"]
-        if any(w["app_id"] != failure_id for w in windows):  # private Sway has Xwayland disabled
+        if any(w["app_id"] != failure_id for w in windows):
             # Acknowledge the map in the private runtime only. A later normal
             # app exit must not be reported as a startup error.
             workspace(name, "open", "--", "touch", "/run/workspace/" + failure_id)
@@ -129,7 +129,7 @@ def new_workspace(program, entry, bindir, data):
                 workspace(name, "stop")
             raise RuntimeError(f"{program}: {reason} (privates Profil, offline, ohne Dateifreigabe).")
         time.sleep(0.15)
-    raise RuntimeError(f"{name}: Kein natives Wayland-Fenster nach 30 Sekunden. Privates Profil, offline, "
+    raise RuntimeError(f"{name}: Kein privates Anwendungsfenster nach 30 Sekunden. Privates Profil, offline, "
                        "ohne Dateifreigabe. Startausgang offen; Sitzung bleibt verfügbar.")
 
 

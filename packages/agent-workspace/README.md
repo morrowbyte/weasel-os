@@ -21,7 +21,7 @@ weasel-workspace --name bericht stop
 Es startet direkt mit dem angegebenen Argumentvektor. Shell-Syntax wird nur von
 einer explizit geöffneten Shell interpretiert. Der zurückgegebene PID gehört
 zum privaten Namespace. `wait-window` wartet auf ein fokussiertes Fenster mit
-exakt passender Wayland-App-ID. `status` zeigt App-IDs, Titel, Fokus, Ausgabe,
+exakt passender Wayland-App-ID oder X11-Klasse (z. B. `XTerm`). `status` zeigt App-IDs, Titel, Fokus, Ausgabe,
 Rechte, laufenden Auftrag und die Eingabesperre.
 
 ## Dieselbe App am Desktop bedienen
@@ -121,7 +121,10 @@ auf dem menschlichen Desktop hat seinen eigenen Abbruchweg.
 - Der Nix-Store ist schreibgeschützt lesbar. Es gibt ein minimales privates
   `/dev` und ein privates `/proc`. Host-Home, Host-D-Bus, Display-Sockets,
   Host-Konfigurationsprofile, Audiogeräte und physische Eingabegeräte werden
-  nicht eingebunden. Desktop-Applikationen müssen Wayland nativ unterstützen.
+  nicht eingebunden. Für X11-Anwendungen startet Sway bei Bedarf Xwayland
+  im selben Namespace. Der Broker setzt `DISPLAY` anhand des Unix-Sockets
+  im privaten `/tmp/.X11-unix`. wlroots übergibt Xwayland die lokalen
+  Listener; Zugang und Zwischenablage gehören zu dieser privaten Sitzung.
 - Programme derselben Sitzung teilen sich Home, Bus und Display. Ein weiterer
   Aufruf eines Singletons kann ein vorhandenes Fenster **dieser Sitzung**
   verwenden. Eine separate Sitzung erhält ein eigenes Profil. Ausdrücklich

@@ -29,7 +29,7 @@ FIELD_LABELS = {
     "expected_text": "Erwarteter Feldinhalt", "text": "Text", "app": "Programm",
     "name": "Name der privaten Arbeitsfläche", "exchange": "Austauschordner (optional)",
     "network": "Netzwerkzugang", "program": "Ausführbares Programm", "argv": "Argumente als JSON-Liste (optional)",
-    "wait_window": "Exakte Wayland-App-ID des neuen Fensters", "key": "Taste oder Tastenkürzel",
+    "wait_window": "Wayland-App-ID oder X11-Klasse des neuen Fensters", "key": "Taste oder Tastenkürzel",
     "x": "X-Koordinate", "y": "Y-Koordinate", "button": "Maustaste", "direction": "Scrollrichtung",
     "steps": "Scrollschritte", "filename": "Dateiname",
     "source": "Bisheriger Dateiname", "destination": "Neuer Dateiname",

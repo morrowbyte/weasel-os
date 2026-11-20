@@ -76,9 +76,16 @@ async def windows():
     result = []
 
     def visit(node):
-        if node.get("pid") and node["type"] in ("con", "floating_con"):
-            result.append({"id": node["id"], "app_id": node.get("app_id"),
-                           "title": (node.get("name") or "")[:512], "focused": node["focused"]})
+        # X11 clients need not set _NET_WM_PID. Sway supplies the XID itself.
+        xid = node.get("window")
+        if (node.get("pid") or xid) and node["type"] in ("con", "floating_con"):
+            window = {"id": node["id"], "app_id": node.get("app_id"),
+                      "title": (node.get("name") or "")[:512], "focused": node["focused"]}
+            if xid:
+                props = node["window_properties"]
+                window.update(app_id=props.get("class"), x11_class=props.get("class"),
+                              x11_instance=props.get("instance"), x11_window=xid)
+            result.append(window)
         for child in node["nodes"] + node["floating_nodes"]:
             visit(child)
     visit(tree)
@@ -367,8 +374,13 @@ async def serve():
                     raise RuntimeError(f"private desktop exited (sway={sway.returncode}, dbus={bus.returncode})")
                 displays = [p for p in RUNTIME.glob("wayland-*") if p.is_socket()]
                 ipc = [p for p in RUNTIME.glob("sway-ipc.*.sock") if p.is_socket()]
-                if len(displays) == len(ipc) == 1 and (RUNTIME / "bus").is_socket():
-                    os.environ.update(WAYLAND_DISPLAY=displays[0].name, SWAYSOCK=str(ipc[0]))
+                # wlroots reserves this listener even before lazy Xwayland starts.
+                # /tmp is a fresh tmpfs and no applications have been admitted yet.
+                x11 = [p for p in Path("/tmp/.X11-unix").glob("X[0-9]*")
+                       if p.name[1:].isdigit() and p.is_socket()]
+                if len(displays) == len(ipc) == len(x11) == 1 and (RUNTIME / "bus").is_socket():
+                    os.environ.update(WAYLAND_DISPLAY=displays[0].name, SWAYSOCK=str(ipc[0]),
+                                      DISPLAY=":" + x11[0].name[1:])
                     await outputs()
                     # Bind both device types before an application can connect.
                     seat = await asyncio.create_subprocess_exec(

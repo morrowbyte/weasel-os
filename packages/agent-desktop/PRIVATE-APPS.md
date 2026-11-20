@@ -13,7 +13,8 @@ Programmname aus dem Host-PATH oder ein ausführbarer Nix-Store-Pfad.
 Programmargumente gehören einzeln in die JSON-Liste, zum Beispiel
 `["--app-id=privater-bericht", "--title=Privater Bericht"]` für `foot`.
 Ohne Argumente das Feld leer lassen. Das nächste Feld erwartet die exakte
-Wayland-App-ID, im Beispiel `privater-bericht`.
+Wayland-App-ID, im Beispiel `privater-bericht`, oder bei X11 die Klasse aus
+`WM_CLASS`, etwa `XTerm` für xterm.
 
 Der MCP-Aufruf `private_open` verwendet dieselben Felder wie die CLI.
 Eine Folge kann den Start der Sitzung und das Öffnen der App verbinden.
@@ -35,7 +36,8 @@ Für einen Austauschordner `exchange` als Host-Pfad und für Netzwerkzugang
 Prozessstart und das fokussierte Fenster in einem Auftrag. `private_open`
 weist bereits vorhandene Fenster mit derselben App-ID zurück. Bei Programmen
 mit fester App-ID bietet sich eine eigene benannte Sitzung an. Der Fensterbeleg
-enthält Wayland-App-ID und Fenster-ID. Die Prozess-ID stammt aus dem privaten
+enthält die private Sway-Fenster-ID und die zum Warten verwendete Kennung.
+Für X11 enthält er zusätzlich `x11_class`, `x11_instance` und die XID in `x11_window`. Die Prozess-ID stammt aus dem privaten
 PID-Namespace. Die Zuordnung des Fensters erfolgt über die App-ID und den
 Fensterbestand vor dem Start. Für parallele Starts eignet sich eine je App-Start
 eindeutige App-ID.
