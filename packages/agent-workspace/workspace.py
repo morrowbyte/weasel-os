@@ -86,6 +86,12 @@ class Paths:
         return False
 
 
+class BrokerError(RuntimeError):
+    def __init__(self, reply):
+        super().__init__(reply["error"])
+        self.reply = reply
+
+
 def rpc(paths, request, timeout=MAX_SECONDS + 5):
     line = json.dumps(request, ensure_ascii=False).encode() + b"\n"
     if len(line) > MAX_REQUEST:
@@ -93,14 +99,23 @@ def rpc(paths, request, timeout=MAX_SECONDS + 5):
     with socket.socket(socket.AF_UNIX) as peer:
         peer.settimeout(timeout)
         peer.connect(str(paths.sock))
-        peer.sendall(line)
-        with peer.makefile("rb") as stream:
-            line = stream.readline(MAX_REPLY + 1)
-    if not line.endswith(b"\n") or len(line) > MAX_REPLY:
-        raise RuntimeError("incomplete or oversized workspace reply")
-    reply = json.loads(line)
-    if not reply.pop("ok"):
-        raise RuntimeError(reply["error"])
+        try:
+            peer.sendall(line)
+            with peer.makefile("rb") as stream:
+                line = stream.readline(MAX_REPLY + 1)
+            if not line.endswith(b"\n") or len(line) > MAX_REPLY:
+                raise ValueError("incomplete or oversized workspace reply")
+            reply = json.loads(line)
+            if not isinstance(reply, dict) or type(reply.get("ok")) is not bool:
+                raise ValueError("invalid workspace reply")
+            if not reply["ok"] and not isinstance(reply.get("error"), str):
+                raise ValueError("missing error in workspace reply")
+        except (OSError, ValueError) as exc:
+            # Once sending begins the peer might have run any prefix.
+            raise BrokerError({"ok": False, "error": str(exc)}) from exc
+    if not reply["ok"]:
+        raise BrokerError(reply)
+    del reply["ok"]
     return reply
 
 
@@ -241,9 +256,13 @@ def execute(args):
             if isinstance(action, list) and len(action) > 1 and action[0] == "open":
                 action[1] = program(action[1])
     actions = validate_batch(actions)
+    typing_mode = os.environ.get("WEASEL_WORKSPACE_TYPING", "fast")
+    if typing_mode not in ("fast", "upstream"):
+        raise ValueError("WEASEL_WORKSPACE_TYPING must be fast or upstream")
     if op == "batch":
         claim_job(paths, job)
-    return rpc(paths, {"op": "batch", "actions": actions, "epoch": gate["epoch"], "job": job})
+    return rpc(paths, {"op": "batch", "actions": actions, "epoch": gate["epoch"], "job": job,
+                       "typing_mode": typing_mode})
 
 
 def main():
@@ -266,8 +285,12 @@ def main():
     os.umask(0o077)
     try:
         result = execute(args)
+    except BrokerError as exc:
+        print(json.dumps(exc.reply), file=sys.stderr)
+        return 1
     except (ValueError, RuntimeError, OSError, sqlite3.Error) as exc:
-        print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
+        progress = {"attempted": 0, "results": []} if args.command == "batch" else {}
+        print(json.dumps({"ok": False, "error": str(exc), **progress}), file=sys.stderr)
         return 1
     ok = not any("error" in item for item in result.get("workspaces", []))
     print(json.dumps({"ok": ok, **result}, ensure_ascii=False))

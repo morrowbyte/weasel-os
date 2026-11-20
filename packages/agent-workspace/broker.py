@@ -14,6 +14,7 @@ from actions import MAX_REQUEST, MAX_SECONDS, chord, identifier, validate_batch
 
 HERE = Path(__file__).resolve().parent
 RUNTIME = Path("/run/workspace")
+FAST_WTYPE = "@fastWtype@"
 
 
 async def run(*args, data=None):
@@ -58,7 +59,7 @@ async def windows():
     return result
 
 
-async def act(action):
+async def act(action, typing_mode):
     name, *args = action
     if name == "open":
         proc = await asyncio.create_subprocess_exec(*args, stdin=DEVNULL, stdout=DEVNULL, stderr=DEVNULL)
@@ -72,10 +73,12 @@ async def act(action):
     if name in ("text", "key"):
         if not any(w["focused"] for w in await windows()):
             raise RuntimeError("no focused application in this workspace")
+        # One stdin keymap chunk in wtype 0.4 holds up to 100 characters.
+        wtype = FAST_WTYPE if typing_mode == "fast" and len(args[0]) <= 100 else "wtype"
         if name == "text":
-            await run("wtype", "-", data=args[0].encode())
+            await run(wtype, "-", data=args[0].encode())
         else:
-            await run("wtype", *chord(args[0]))
+            await run(wtype, *chord(args[0]))
     else:
         await outputs()
         await run(HERE / "workspace-pointer", name, *map(str, args))
@@ -101,18 +104,18 @@ class Broker:
         while self.admitted():
             await asyncio.sleep(0.05)
 
-    async def batch(self, actions):
-        results = []
+    async def batch(self, actions, progress, typing_mode):
         for index, action in enumerate(actions):
             try:
                 if not self.admitted():
                     raise RuntimeError("input revoked")
-                results.append(await act(action))
+                progress["attempted"] = index + 1
+                progress["results"].append(await act(action, typing_mode))
             except Exception as exc:
                 raise RuntimeError(f"action {index + 1} ({action[0]}): {exc}") from exc
-        return {"results": results}
+        return {"results": progress["results"]}
 
-    async def dispatch(self, request, reader):
+    async def dispatch(self, request, reader, progress):
         op = request["op"]
         if op == "status":
             return {"running": True, "output": await outputs(), "windows": await windows(),
@@ -143,8 +146,11 @@ class Broker:
             if gate["paused"] or gate["epoch"] != request["epoch"]:
                 raise RuntimeError("input paused or admission expired")
             actions = validate_batch(request["actions"])
+            typing_mode = request.get("typing_mode", "fast")
+            if typing_mode not in ("fast", "upstream"):
+                raise ValueError("unknown private typing mode")
             self.epoch = gate["epoch"]
-            work = self.batch(actions)
+            work = self.batch(actions, progress, typing_mode)
         elif op == "screenshot":
             job = "screenshot"
             work = self.capture()
@@ -185,18 +191,23 @@ class Broker:
 
     async def client(self, reader, writer):
         stop = False
+        progress = {}
         try:
             async with asyncio.timeout(5):
                 line = await reader.readline()
             if not line or not line.endswith(b"\n") or len(line) > MAX_REQUEST:
                 raise ValueError("incomplete or oversized request")
             request = json.loads(line)
+            if request["op"] == "batch":
+                # Survives cancellation of the worker. Only finished actions
+                # enter results; one started action may have unknown effects.
+                progress = {"attempted": 0, "results": []}
             async with asyncio.timeout(MAX_SECONDS + 3):
-                result = await self.dispatch(request, reader)
+                result = await self.dispatch(request, reader, progress)
             stop = request["op"] == "stop"
             reply = {"ok": True, **result}
         except Exception as exc:
-            reply = {"ok": False, "error": str(exc) or type(exc).__name__}
+            reply = {"ok": False, "error": str(exc) or type(exc).__name__, **progress}
         try:
             writer.write(json.dumps(reply).encode() + b"\n")
             async with asyncio.timeout(5):

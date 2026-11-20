@@ -22,6 +22,15 @@
 }:
 let
   fonts = makeFontsConf { fontDirectories = [ dejavu_fonts ]; };
+  # This binary is private to the broker. Keep the compositor roundtrips
+  # for press and release and keep wtype's UTF-8 stdin/keymap handling.
+  fastWtype = wtype.overrideAttrs (previous: {
+    postPatch = (previous.postPatch or "") + ''
+      substituteInPlace main.c \
+        --replace-fail 'usleep(2000);' '/* synchronized by wl_display_roundtrip above */' \
+        --replace-fail 'usleep(cmd->delay_ms * 1000);' 'if (cmd->delay_ms) usleep(cmd->delay_ms * 1000);'
+    '';
+  });
 in
 stdenv.mkDerivation {
   pname = "weasel-workspace";
@@ -48,6 +57,7 @@ stdenv.mkDerivation {
     dir="$out/libexec/weasel-workspace"
     mkdir -p "$dir" "$out/bin"
     cp *.py workspace-pointer sway.conf passwd group resolv.conf "$dir/"
+    substituteInPlace "$dir/broker.py" --replace-fail '@fastWtype@' '${fastWtype}/bin/wtype'
     substituteInPlace "$dir/sandbox.py" \
       --replace-fail '@bwrap@' '${bubblewrap}/bin/bwrap' \
       --replace-fail '@slirp@' '${slirp4netns}/bin/slirp4netns' \
