@@ -17,7 +17,8 @@ with subtest("Move and drag in private Mousepad while the foreground draft keeps
             shlex.join([*workspace_cli, "status"])
             + """ | jq -e '.windows[] | select(.focused and (.title | contains("drag-target.txt")))'"""
         ), timeout=45)
-        machine.send_chars("before")
+        for letter in "before":
+            qemu_key(letter, True, False)
         workspace("move", "420", "360")
         machine.wait_until_succeeds(f"test -s {pointer_log}", timeout=10)
         motion_count = int(machine.succeed(f"wc -l < {pointer_log}"))
@@ -37,7 +38,8 @@ with subtest("Move and drag in private Mousepad while the foreground draft keeps
         machine.wait_until_succeeds(f"grep -qx replacement {drag_file}", timeout=30)
         saved = machine.succeed(f"cat {drag_file}")
         assert saved.count("replacement\n") == 1 and saved.replace("replacement\n", "target\n") == "target\n" * 64, saved
-        machine.send_chars("after")
+        for letter in "after":
+            qemu_key(letter, True, False)
         finish_draft("drag", "beforeafter")
         machine.copy_from_machine(drag_file)
         machine.copy_from_machine(f"{home}/draft-drag.txt")
