@@ -1,0 +1,112 @@
+# weasel-workspace
+
+Ein pro Benutzer benannter, flüchtiger Wayland-Desktop für Hintergrundaufträge.
+Einbindung über `pkgs.callPackage ./packages/agent-workspace {}`. Der Host braucht
+Linux mit Benutzer-Namespaces, Bubblewrap und ein eigenes privates
+`XDG_RUNTIME_DIR`. Der Paket-Wrapper bringt die Laufzeitprogramme mit.
+
+## Ein Fenster öffnen
+
+```sh
+weasel-workspace --name bericht start --exchange "$HOME/bericht-austausch"
+weasel-workspace --name bericht open -- foot
+weasel-workspace --name bericht wait-window foot
+weasel-workspace --name bericht text 'Hallo aus dem privaten Desktop'
+weasel-workspace --name bericht screenshot bericht.png
+weasel-workspace --name bericht stop
+```
+
+`foot` steht beispielhaft für ein installiertes natives Wayland-Programm.
+`open` löst das ausführbare Programm über den Host-PATH zu einem Nix-Store-Pfad auf.
+Es startet direkt mit dem angegebenen Argumentvektor. Shell-Syntax wird nur von
+einer explizit geöffneten Shell interpretiert. Der zurückgegebene PID gehört
+zum privaten Namespace. `wait-window` wartet auf ein fokussiertes Fenster mit
+exakt passender Wayland-App-ID. `status` zeigt App-IDs, Titel, Fokus, Ausgabe,
+Rechte, laufenden Auftrag und die Eingabesperre.
+
+## Befehle
+
+Der optionale globale Schalter `--name NAME` steht vor dem Befehl. Standard
+ist `default`. Erfolgreiche Befehle liefern JSON auf stdout. Fehler liefern
+einen Exitcode ungleich null. Bereits belegte Screenshot-Zielpfade werden
+zurückgewiesen.
+
+| Befehl | Wirkung |
+| --- | --- |
+| `start [--exchange DIR] [--network]` | Startet die Sitzung oder meldet die vorhandene Sitzung mit ihren tatsächlichen Rechten. Rechte werden beim Start festgelegt. |
+| `status` | Prüft den privaten Compositor und listet seine Fenster. |
+| `open -- PROGRAM [ARG ...]` | Startet das Programm im privaten Home. |
+| `wait-window APP_ID` | Wartet höchstens 30 Sekunden auf passenden Fokus. |
+| `screenshot DATEI.png` | Schreibt das vollständige private Bild als neue Datei auf dem Host. |
+| `key Ctrl+Shift+s`, `text TEXT` | Sendet einen XKB-Tastennamen mit optionalen Modifikatoren bzw. Unicode-Text an das fokussierte private Fenster. |
+| `click X Y [left\|middle\|right]` | Klickt in absoluten Pixelkoordinaten, standardmäßig links. |
+| `scroll X Y up\|down\|left\|right [SCHRITTE]` | Scrollt 1 bis 32 Rastschritte an dieser Position. |
+| `batch JOB` | Liest ein JSON-Array von Aktionsarrays aus stdin. |
+| `cancel JOB` | Bricht diesen aktuell laufenden Auftrag der benannten Sitzung ab. |
+| `cancel-all` | Sperrt Eingabe für alle Sitzungen dieses Benutzer-Runtime-Verzeichnisses und bricht aktive Broker-Eingaben ab. |
+| `resume` | Öffnet die benutzerweite Eingabe ausdrücklich für neue Aufträge. |
+| `stop` | Beendet den PID-Namespace einschließlich gestarteter Apps und wartet auf die Freigabe seiner Lebensdauersperre. |
+
+Die Ausgabe hat 1280 × 720 Pixel bei Skalierung 1. Koordinaten beginnen links
+oben bei (0, 0). Ein Screenshot darf auch im gesperrten Zustand erfolgen.
+
+## Einmalaufträge und Abbruch
+
+```sh
+printf '%s\n' '[["open","foot"],["wait-window","foot"],["text","Hallo"]]' |
+  weasel-workspace --name bericht batch fenster-01
+```
+
+Ein Batch akzeptiert die Aktionsnamen `open`, `wait-window`, `text`, `key`,
+`click` und `scroll` mit den oben gezeigten Argumenten. Alle Aktionen werden
+vor der ersten Ausführung geprüft. Maximal 64 Aktionen, 64 KiB Anfrage und
+30 Sekunden Gesamtlaufzeit. Pro Desktop läuft höchstens eine Aktionsfolge.
+Konkurrierende Eingaben melden „busy“. Eine verlorene Client-Verbindung
+beendet die laufende Folge. Der erste Fehler beendet die Folge.
+
+Die CLI verbraucht die angegebene Job-ID vor dem Senden. Eine zweite
+Übermittlung derselben ID im selben benannten Workspace schlägt auch nach
+einem Neustart fehl. Die privaten Belege liegen im Benutzer-Runtime-Verzeichnis
+bis zu dessen Entfernung. Bei unbekanntem Ausgang zuerst den Desktop prüfen.
+
+`cancel-all` schließt zuerst die gemeinsame Zulassung und widerruft deren
+Generation. Jeder aktive Broker überwacht diese Datei zusätzlich zur direkten
+Abbruchnachricht. Vor jeder neuen Teilaktion prüft er die Zulassung erneut.
+Eine verspätete Anfrage mit alter Generation bleibt auch nach `resume`
+ungültig. Ein erfolgreicher Abbruch beendet noch laufende Eingabehelfer.
+Bereits zugestellte Ereignisse, Dateiänderungen und geöffnete Apps bleiben
+bestehen. `stop` beendet auch diese Prozesse. `cancel-all` meldet unerreichbare
+laufende Broker einzeln und mit Fehlerstatus. Ein separat gestarteter Actor
+auf dem menschlichen Desktop hat seinen eigenen Abbruchweg.
+
+## Isolations- und Datengrenzen
+
+- Sway läuft headless mit Software-Renderer. Benutzer-, Mount-, PID-, IPC- und
+  Netzwerk-Namespace, Prozessumgebung, Home, Runtime, D-Bus, Clipboard,
+  App-Konfiguration und Singleton-Sockets gehören zur privaten Sitzung.
+  Der Broker nimmt nur seinen vererbten lokalen Kontrollsocket entgegen.
+- Der Nix-Store ist schreibgeschützt lesbar. Es gibt ein minimales privates
+  `/dev` und ein privates `/proc`. Host-Home, Host-D-Bus, Display-Sockets,
+  Host-Konfigurationsprofile, Audiogeräte und physische Eingabegeräte werden
+  nicht eingebunden. Desktop-Applikationen müssen Wayland nativ unterstützen.
+- Programme derselben Sitzung teilen sich Home, Bus und Display. Ein weiterer
+  Aufruf eines Singletons kann ein vorhandenes Fenster **dieser Sitzung**
+  verwenden. Eine separate Sitzung erhält ein eigenes Profil. Ausdrücklich
+  gestartete Programme und ihre Kindprozesse können im Rahmen derselben
+  Sitzungsrechte arbeiten. Das Paket setzt keine anwendungsspezifischen
+  CPU-/RAM-Limits und isoliert Apps innerhalb einer Sitzung nicht voneinander.
+- `--exchange DIR` erstellt ein eigenes privates Verzeichnis oder übernimmt
+  bei Erstverwendung ein leeres benutzereigenes Verzeichnis mit Modus 0700.
+  Danach erkennt die CLI es am Marker `.weasel-workspace-exchange`.
+  Unter `/exchange` erhalten alle Apps der Sitzung Lese-, Schreib- und
+  Löschrechte für den Inhalt. Lege freigegebene Dateien dort ab. Der Host
+  behält das Verzeichnis nach `stop`. Nur gewöhnliche Austauschdateien
+  hineinlegen. Eingebrachte Sockets und andere IPC-Endpunkte teilen deren
+  Fähigkeiten ebenfalls. Ohne diese Option gibt es keine Datenfreigabe.
+- Der Standardbetrieb ist offline. `--network` verbindet den eigenen
+  Netzwerk-Namespace über slirp4netns (IPv4, DNS, Host-Loopback-Weiterleitung
+  deaktiviert). Dies erlaubt ausgehenden Netzwerkverkehr einschließlich
+  erreichbarer LAN-Dienste. Host-Auflösung und die Netzanbindung des Hosts
+  beeinflussen erreichbare Ziele. Der Host-Netzwerk-Namespace und dessen
+  abstrakte Unix-Sockets werden nicht geteilt. Beim Ende des Workspace
+  beendet sich der Netzhelfer über einen Prozessdeskriptor.
