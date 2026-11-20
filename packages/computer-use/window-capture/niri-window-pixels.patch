@@ -1,0 +1,319 @@
+--- a/niri-ipc/src/lib.rs
++++ b/niri-ipc/src/lib.rs
+@@ -73,6 +73,11 @@
+     Workspaces,
+     /// Request information about open windows.
+     Windows,
++    /// Sample one mapped window into memory, with screencast privacy rules.
++    WindowPixels {
++        /// Compositor window ID from the current socket's inventory.
++        id: u64,
++    },
+     /// Request information about layer-shell surfaces.
+     Layers,
+     /// Request information about the configured keyboard layouts.
+@@ -147,6 +152,13 @@
+     Workspaces(Vec<Workspace>),
+     /// Information about open windows.
+     Windows(Vec<Window>),
++    /// PNG image of one explicitly requested window.
++    WindowPixels {
++        /// Window sampled by the compositor.
++        id: u64,
++        /// Encoded image, bounded to 4 MiB.
++        png: Vec<u8>,
++    },
+     /// Information about layer-shell surfaces.
+     Layers(Vec<LayerSurface>),
+     /// Information about the keyboard layout.
+--- a/src/backend/tty.rs
++++ b/src/backend/tty.rs
+@@ -1825,6 +1825,10 @@
+         }
+     }
+ 
++    pub fn session_active(&self) -> bool {
++        self.session.is_active()
++    }
++
+     pub fn seat_name(&self) -> String {
+         self.session.seat()
+     }
+--- a/src/cli.rs
++++ b/src/cli.rs
+@@ -67,6 +67,12 @@
+     Workspaces,
+     /// List open windows.
+     Windows,
++    /// Write an explicitly selected window's private PNG to standard output.
++    WindowPixels {
++        /// Numeric window ID from this compositor instance.
++        #[arg(long)]
++        id: u64,
++    },
+     /// List open layer-shell surfaces.
+     Layers,
+     /// Get the configured keyboard layouts.
+--- a/src/ipc/client.rs
++++ b/src/ipc/client.rs
+@@ -43,6 +43,7 @@
+         },
+         Msg::Workspaces => Request::Workspaces,
+         Msg::Windows => Request::Windows,
++        Msg::WindowPixels { id } => Request::WindowPixels { id: *id },
+         Msg::Layers => Request::Layers,
+         Msg::KeyboardLayouts => Request::KeyboardLayouts,
+         Msg::EventStream => Request::EventStream,
+@@ -111,6 +112,16 @@
+     let response = reply.map_err(|err_msg| anyhow!(err_msg).context("niri returned an error"))?;
+ 
+     match msg {
++        Msg::WindowPixels { id } => {
++            use std::io::{stdout, IsTerminal, Write};
++            let Response::WindowPixels { id: sampled, png } = response else {
++                bail!("wrong reply to window pixel request");
++            };
++            if sampled != id || json || stdout().is_terminal() {
++                bail!("window pixel reply requires the matching ID and a binary output pipe");
++            }
++            stdout().lock().write_all(&png)?;
++        }
+         Msg::RequestError => {
+             bail!("unexpected response: expected an error, got {response:?}");
+         }
+--- a/src/ipc/server.rs
++++ b/src/ipc/server.rs
+@@ -1,6 +1,7 @@
+ use std::cell::RefCell;
+ use std::collections::HashSet;
+ use std::ffi::OsStr;
++use std::os::fd::{AsRawFd, BorrowedFd};
+ use std::os::unix::net::{UnixListener, UnixStream};
+ use std::path::{Path, PathBuf};
+ use std::rc::Rc;
+@@ -184,7 +185,9 @@
+     }
+ }
+ 
+-async fn handle_client(ctx: ClientCtx, stream: Async<'static, UnixStream>) -> anyhow::Result<()> {
++async fn handle_client(ctx: ClientCtx, mut stream: Async<'static, UnixStream>) -> anyhow::Result<()> {
++    // Both split halves own this socket for the lifetime of handle_client.
++    let raw_fd = stream.get_mut().as_raw_fd();
+     let (read, mut write) = stream.split();
+     let mut read = BufReader::new(read);
+ 
+@@ -208,8 +211,17 @@
+         let requested_error = matches!(request, Ok(Request::ReturnError));
+         let requested_event_stream = matches!(request, Ok(Request::EventStream));
+ 
++        let window_pixels = matches!(request, Ok(Request::WindowPixels { .. }));
++        // Limit outstanding encoders as well as replies blocked on slow readers.
++        static CAPTURE_SLOT: std::sync::Mutex<()> = std::sync::Mutex::new(());
++        let reservation = window_pixels.then(|| CAPTURE_SLOT.try_lock().ok());
+         let reply = match request {
+-            Ok(request) => process(&ctx, request).await,
++            Ok(_) if matches!(reservation, Some(None)) => Err(String::from("window capture busy")),
++            Ok(request) => {
++                // SAFETY: read and write are still live and cannot be moved into process.
++                let peer = unsafe { BorrowedFd::borrow_raw(raw_fd) };
++                process(&ctx, request, peer).await
++            }
+             Err(err) => Err(err),
+         };
+ 
+@@ -268,7 +280,7 @@
+     }
+ }
+ 
+-async fn process(ctx: &ClientCtx, request: Request) -> Reply {
++async fn process(ctx: &ClientCtx, request: Request, peer: BorrowedFd<'_>) -> Reply {
+     let response = match request {
+         Request::ReturnError => return Err(String::from("example compositor error")),
+         Request::Version => Response::Version(version()),
+@@ -286,6 +298,53 @@
+             let state = ctx.event_stream_state.borrow();
+             let windows = state.windows.windows.values().cloned().collect();
+             Response::Windows(windows)
++        }
++        Request::WindowPixels { id } => {
++            let peer = peer
++                .try_clone_to_owned()
++                .map_err(|_| String::from("window capture peer unavailable"))?;
++            let (tx, rx) = async_channel::bounded(1);
++            ctx.event_loop.insert_idle(move |state| {
++                let mut interest = libc::pollfd {
++                    fd: peer.as_raw_fd(),
++                    events: libc::POLLRDHUP,
++                    revents: 0,
++                };
++                // A canceled CLI closes its connection. Drop requests that were
++                // still queued when the peer disconnected.
++                if unsafe { libc::poll(&mut interest, 1, 0) } != 0 {
++                    let _ = tx.try_send(Err(String::from("window capture peer disconnected")));
++                    return;
++                }
++                match state.sample_window_pixels(id) {
++                    Err(err) => {
++                        let _ = tx.try_send(Err(err.to_string()));
++                    }
++                    Ok((size, pixels)) => {
++                        std::thread::spawn(move || {
++                            let mut png = Vec::new();
++                            let result = crate::utils::write_png_rgba8(
++                                &mut png,
++                                size.w as u32,
++                                size.h as u32,
++                                &pixels,
++                            )
++                            .map_err(|_| String::from("PNG encoding failed"))
++                            .and_then(|()| {
++                                if png.len() > 4 * 1024 * 1024 {
++                                    Err(String::from("window image exceeds encoded size limit"))
++                                } else {
++                                    Ok(Response::WindowPixels { id, png })
++                                }
++                            });
++                            let _ = tx.try_send(result);
++                        });
++                    }
++                }
++            });
++            rx.recv()
++                .await
++                .map_err(|_| String::from("window capture unavailable"))??
+         }
+         Request::Layers => {
+             let (tx, rx) = async_channel::bounded(1);
+--- a/src/niri.rs
++++ b/src/niri.rs
+@@ -699,6 +699,80 @@
+ }
+ 
+ impl State {
++    pub(crate) fn sample_window_pixels(
++        &mut self,
++        id: u64,
++    ) -> anyhow::Result<(Size<i32, Physical>, Vec<u8>)> {
++        let niri = &self.niri;
++        ensure!(
++            matches!(niri.lock_state, LockState::Unlocked) && niri.monitors_active,
++            "window capture unavailable while locked, locking or blanked"
++        );
++        ensure!(
++            !matches!(&self.backend, Backend::Tty(tty) if !tty.session_active()),
++            "window capture unavailable on an inactive seat"
++        );
++        let (monitor, mapped) = niri
++            .layout
++            .windows()
++            .find(|(_, mapped)| mapped.id().get() == id)
++            .context("window no longer mapped")?;
++        let output = monitor.context("window has no output")?.output();
++        let config = niri.config.borrow();
++        let target_rules = ResolvedWindowRules::compute_with_cast_target(
++            &config.window_rules,
++            WindowRef::Mapped(mapped),
++            niri.is_at_startup,
++            true,
++        );
++        // Include the ordinary rules as well as those for an active cast target.
++        // A pending rule recalculation must never create a gap in privacy.
++        let current_rules = ResolvedWindowRules::compute(
++            &config.window_rules,
++            WindowRef::Mapped(mapped),
++            niri.is_at_startup,
++        );
++        ensure!(
++            mapped.rules().block_out_from.is_none()
++                && current_rules.block_out_from.is_none()
++                && target_rules.block_out_from.is_none(),
++            "window is protected by a capture rule"
++        );
++
++        // Render the most recently committed surfaces, including the window's own popups,
++        // into an initially transparent target. No output contents or pointer are used.
++        let bbox = mapped.window.bbox_with_popups();
++        let edge = bbox.size.w.max(bbox.size.h);
++        ensure!(bbox.size.w > 0 && bbox.size.h > 0, "empty window");
++        let scale = Scale::from(
++            output
++                .current_scale()
++                .fractional_scale()
++                .min(1920. / f64::from(edge)),
++        );
++        let size = bbox.to_physical_precise_up(scale).size;
++        ensure!(
++            (1..=1920).contains(&size.w) && (1..=1920).contains(&size.h),
++            "invalid window size"
++        );
++        self.backend
++            .with_primary_renderer(|renderer| {
++                let mut elements = Vec::new();
++                mapped.render_for_screen_cast(renderer, scale, &mut |elem| elements.push(elem));
++                ensure!(!elements.is_empty(), "window has no committed content");
++                let pixels = render_to_vec(
++                    renderer,
++                    size,
++                    scale,
++                    Transform::Normal,
++                    Fourcc::Abgr8888,
++                    elements.into_iter().rev(),
++                )?;
++                Ok((size, pixels))
++            })
++            .context("window renderer unavailable")?
++    }
++
+     pub fn new(
+         config: Config,
+         event_loop: LoopHandle<'static, State>,
+--- a/src/window/mod.rs
++++ b/src/window/mod.rs
+@@ -181,6 +181,15 @@
+ 
+ impl ResolvedWindowRules {
+     pub fn compute(rules: &[WindowRule], window: WindowRef, is_at_startup: bool) -> Self {
++        Self::compute_with_cast_target(rules, window, is_at_startup, window.is_window_cast_target())
++    }
++
++    pub fn compute_with_cast_target(
++        rules: &[WindowRule],
++        window: WindowRef,
++        is_at_startup: bool,
++        cast_target: bool,
++    ) -> Self {
+         let _span = tracy_client::span!("ResolvedWindowRules::compute");
+ 
+         let mut resolved = ResolvedWindowRules::default();
+@@ -202,7 +211,7 @@
+                         }
+                     }
+ 
+-                    window_matches(window, role, m)
++                    window_matches(window, role, m, cast_target)
+                 };
+ 
+                 if !(rule.matches.is_empty() || rule.matches.iter().any(matches)) {
+@@ -383,7 +392,12 @@
+     }
+ }
+ 
+-fn window_matches(window: WindowRef, role: &XdgToplevelSurfaceRoleAttributes, m: &Match) -> bool {
++fn window_matches(
++    window: WindowRef,
++    role: &XdgToplevelSurfaceRoleAttributes,
++    m: &Match,
++    cast_target: bool,
++) -> bool {
+     // Must be ensured by the caller.
+     let server_pending = role.server_pending.as_ref().unwrap();
+ 
+@@ -440,7 +454,7 @@
+     }
+ 
+     if let Some(is_window_cast_target) = m.is_window_cast_target {
+-        if window.is_window_cast_target() != is_window_cast_target {
++        if cast_target != is_window_cast_target {
+             return false;
+         }
+     }

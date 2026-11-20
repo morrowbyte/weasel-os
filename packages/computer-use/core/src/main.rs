@@ -11,6 +11,7 @@ mod observation_policy;
 mod privacy_tests;
 mod release_recovery;
 mod takeover;
+mod window_pixels;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use image_reference::{Cache as ReferenceCache, Key as ReferenceKey, Pixels};
 use keyboard::Keyboard;
@@ -1646,6 +1647,44 @@ fn error_result(message: String) -> Value {
 fn observe(state: &State, args: &Value) -> R<Value> {
     observe_inner(state, args, false)
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WindowPixelsArgs {
+    window_id: u64,
+}
+
+fn observe_window_pixels(state: &State, args: &Value, epoch: u64) -> R<Value> {
+    state.observation_policy.require_enabled()?;
+    let args: WindowPixelsArgs = serde_json::from_value(args.clone())
+        .map_err(|_| "Window image requires an explicit window_id")?;
+    let id = args.window_id;
+    let _actor = state.actor.try_lock().map_err(|_| "Actor busy; request a fresh window frame when released")?;
+    let target = || -> R<Value> {
+        let windows = niri_window_identities(state, Some(epoch))?;
+        let mut candidates = windows.as_array().ok_or("Missing Niri inventory")?
+            .iter().filter(|w| w["id"].as_u64() == Some(id));
+        let w = candidates.next().ok_or("Window is no longer mapped")?;
+        if candidates.next().is_some() || w["workspace_id"].as_u64().is_none() {
+            return Err("Window mapping is ambiguous or detached".into());
+        }
+        Ok(identity(w))
+    };
+    let before = target()?;
+    let start = Instant::now();
+    let frame = window_pixels::capture(state, id, epoch)?;
+    if target()? != before { return Err("Window identity or layout changed during readback".into()); }
+    check_epoch(state, Some(epoch))?;
+    let mut data = json!({"schema":1,"window_id":id,"epoch":epoch,"width":frame.width,
+        "height":frame.height,"observation_kind":"window_pixels","input_authority":false,
+        "source":"Most recently committed window surfaces, sampled by Niri on request. The app may be idle or occluded.",
+        "capture_ms":start.elapsed().as_secs_f64()*1000.0});
+    observation_fields(state, &mut data);
+    let mut result = text_result(data);
+    result["content"].as_array_mut().unwrap().push(json!({"type":"image","mimeType":"image/png","data":STANDARD.encode(frame.png)}));
+    check_epoch(state, Some(epoch))?;
+    Ok(result)
+}
+
 fn observation_input_readiness(state: &State, input_generation: u64) -> Value {
     // An ordinary-input collision does not make a captured image unavailable.
     // Readiness is advisory; the saved observation retains its capture-start
@@ -3919,6 +3958,7 @@ fn handle_inner(state: &State, tool: &str, args: &Value, epoch: u64) -> R<Value>
             json!({"schema":1,"windows":niri(state,"windows")?,"outputs":niri(state,"outputs")?,"workspaces":niri(state,"workspaces")?}),
         ))},
         "desktop_observe" => observe(state, args),
+        "desktop_window_pixels" => observe_window_pixels(state, args, epoch),
         "desktop_semantic" => semantic(state, args),
         "desktop_semantic_direct" => semantic_direct(state, args),
         "desktop_act" => act(state, args, epoch),
@@ -4363,6 +4403,7 @@ fn tools() -> Value {
       {"name":"desktop_status","description":"Persistent Niri desktop actor status, active/preparing task, queued batches, cancel epoch and escape_policy=cancel_current_task. Physical Escape cancels current work without a persistent latch or unlock ceremony; idle Escape only invalidates observations. Stopped task IDs and stale observations cannot resume. Reports independent capture attempt/failure evidence and shared resume_input_readiness; capture_available=false alone is not capture failure. Startup capture_not_attempted=true is expected. Readiness is only a snapshot, not user permission or actor release. Advertises global_keyboard routing_revision=2 only when this software implements scoped owned-uinput routing; this is not a live device/UI-success attestation. Does not capture or act.","inputSchema":{"type":"object","properties":{}}},
       {"name":"desktop_windows","description":"Read actual Niri windows, outputs and workspaces. Window layout may lack global app bounds; never invent bounds.","inputSchema":{"type":"object","properties":{}}},
       {"name":"desktop_observe","description":"Capture one actual laptop output via grim at scale1, plus Niri identities. Startup capture_not_attempted=true is expected and permits this first read-only observation. Input always requires accepted fresh observation and action_ready; prior successful capture is not a prerequisite for authorized startup resume. Optional crop uses full-output screenshot pixels x/y/width/height; action x/y then use local pixels of the displayed crop. Core translates crop origin; NEVER add compositor output origin. Actual PNG size can differ from Niri logical size by rounding. Observation expires in60seconds; identity/geometry and fresh target-region guards still run. Observe after focus/workspace/layout changes. include_image=false returns private PNG reference only.","inputSchema":{"type":"object","properties":{"output":{"type":"string"},"include_image":{"type":"boolean"},"crop":crop}}},
+      {"name":"desktop_window_pixels","description":"Read one mapped window on any workspace using the agent-first Niri compositor. Returns the latest committed surfaces as a bounded PNG, including that window's popups. Read-only, in memory, no pointer or clipboard. Image grants no input authority. Locked, protected, unmapped, or unsupported targets fail without a fallback.","inputSchema":{"type":"object","properties":{"window_id":{"type":"integer","minimum":1}},"required":["window_id"],"additionalProperties":false}},
       {"name":"desktop_semantic","description":"Read fresh Cua AT-SPI elements for a Niri window. Maps only unique actual PID+title; synthetic Cua IDs are never guessed. Query filters returned elements. Accessibility bounds are app-local and NOT screenshot coordinates; do not directly click them without calibrated mapping. Limited/root-only trees require visual fallback.","inputSchema":{"type":"object","properties":{"window_id":{"type":"integer"},"query":{"type":"string"},"max_elements":{"type":"integer"},"max_depth":{"type":"integer"}},"required":["window_id"]}},
       {"name":"desktop_semantic_direct","description":"Read exact-window AT-SPI labels/tree even during ordinary physical activity or held controls. Set background=true for direct click/set_value on a mapped window, including inactive workspaces, without moving the pointer or requesting focus. Pass the returned observation_id to desktop_act; post-observation reads only that target via AT-SPI; unrelated physical input does not invalidate those handles. Original object/context, target output and Escape are still checked; an app may itself change focus after an action. Returns original/current input generation and explicit input/action readiness. Non-actionable or incomplete snapshots issue no handles (focus/click/set_value=false); obtain a fresh complete snapshot after controls release. Only daemon-owned handles from actionable complete snapshots may be used with desktop_act semantic_set_value, semantic_click or standalone semantic_focus. focusable/FOCUSED flags attest element keyboard focus separately from Niri window focus; semantic_focus requires fresh complete semantics and verifies FOCUSED on the same exact object before returning focus_verified. Reobserve and requery semantics before later keyboard input. No raw object/index/Cua tokens and no pixel fallback. Native GTK candidates need live acceptance; missing/incomplete bridges use visual typed actions.","inputSchema":{"type":"object","properties":{"window_id":{"type":"integer"},"query":{"type":"string"},"max_elements":{"type":"integer"},"max_depth":{"type":"integer"},"background":{"type":"boolean","description":"Object-targeted click/edit on the exact mapped target window without requesting focus or moving the pointer; no pointer, clipboard, keyboard or focus fallback."},"include_text_selection":{"type":"boolean","description":"Opt-in bounded selection readback for at most one showing enabled FOCUSED unprotected Text object; unicode codepoint [start,end). Explicit available/unsupported/error, no input authority; check fresh generation, complete tree and text identity separately."}},"required":["window_id"]}},
       {"name":"desktop_act","description":"Standalone launch_app(app:zed|chrome), editor_open_project(project:jarvis) and editor_open_file(project:jarvis,relative_path) spawn pinned isolated apps on the observed active output. OS spawn ACK is not UI success; uncertain spawn requires verification, no auto retry. Single-writer typed desktop actions against fresh observation. With a live task indicator, every call must include that exact task_id; old, ended or mismatched task identities are refused, while multiple batches in the same live scope are allowed. Rejects changed focus/geometry/scaling or changed pixels near pointer targets. x/y are local to displayed screenshot/crop. Every move/click/scroll/drag requires the displayed view to be at most1200 pixels on each axis; an oversized view rejects the whole batch before any input, queue admission or device preparation. Capture a fresh target crop and use its crop-local coordinates. Full images remain usable for overview, focus, keys and semantics. Focus must be standalone. close_window(window_id) is standalone with the same top-level window_id, exact fresh focused target/title/output; caller proves task ownership and safe saved state. Explicit close request acknowledgement is not window disappearance; inspect fresh inventory and any save modal. No PID kill or blind cleanup. Unknown or misplaced fields for an action kind reject the whole batch before input; restore_clipboard belongs only to paste, while type always preserves the prior selection. For background click/edit, observe_after returns a fresh AT-SPI tree of that window. For seat actions, by default observe_after=true returns a new after_observation ID and image in this same response after dispatch/release and a bounded80ms defaultsettle wait; settle_ms=0..1000 can adjust. Use it for the next act and inspect expected result. A slow/unchanged frame needs another observation/semantic check, not repetition of toggle input. include_image=false omits its image. Acknowledgement is not UI success. Type text_method=auto uses clipboard for known Electron IDs (code/T3) and >1000-character text, keyboard for shorter text in other apps; explicit keyboard/clipboard are available. Electron wtype Unicode is unreliable on this laptop. Clipboard preserves supported text/rich app payloads and original Chromium provenance in bounded RAM from one offer, normalizes duplicate MIME names, omits SAVE_TARGETS and SAME_APP GTK_TEXT_BUFFER_CONTENTS transport markers, preserves serialized GTK rich text, and keeps a separate source holder across actor restarts. Unsupported/sensitive/oversized formats refuse before replacement. Own-source check runs after layout/keymap/window validation and before the first paste modifier press; ownership can still change between reply and input because Wayland has no atomic selection-check-and-paste. No restore after takeover/cancel/ownership loss. Scroll dx/dy are discrete wheel steps (integer -100..100), not pixels; positive dx moves right and positive dy moves down. Smooth-scroll animation needs another fresh observation/settle check before reusing visual targets. Keys are modifiers first e.g.[ctrl,l],[Return]. Explicit key_scope=compositor and Super/meta/logo chords use an owned persistent direct-uinput device because this Niri25.11 Wayland virtual keyboard bypasses compositor bindings; Ctrl/app chords retain the Wayland transport. A fresh proxy check requires backend routing_revision=2 and binds session/epoch/observation before forwarding a global batch; an older backend is refused. Missing permission/takeover monitor/compositor device-open evidence refuses the complete batch before input. Creating the own device is a capability side effect. A kernel input acknowledgement does not verify Niri/UI acceptance; inspect the fresh result. No automatic input fallback. Direct semantic_set_value(handle_id,text,expected_text optional) replaces exact editable contents; semantic_click(handle_id,action_name from direct tree) invokes only AT-SPI named action. Both freshly revalidate context and have no input fallback. Standalone semantic_focus(handle_id) uses Component.GrabFocus, then repeats exact object/window/context validation and freshly queries FOCUSED; acceptance alone is not focus_verified. It sends no keyboard input or fallback. Reobserve and requery the exact focused object before keyboard input. Batch stable edits/shortcuts when intermediate states cannot invalidate later targets; changed-target actions need fresh observation. When observation is disabled, obtain desktop_blind_target first: only explicit keyboard text (printable ASCII, at most256 bytes), a narrow app-key allowlist and waits up to250ms are accepted with observe_after=false and include_image=false. Auto text, paste, clipboard shortcuts, pointer, AT-SPI, focus, close and launch are refused. The private batch deadline is at most8000ms. Input acknowledgement is never content verification.","inputSchema":{"type":"object","properties":{"observation_id":{"type":"string"},"window_id":{"type":"integer"},"task_id":{"type":"string"},"timeout_ms":{"type":"integer","minimum":100,"maximum":120000,"description":"Whole batch deadline; release cleanup follows timeout."},"observe_after":{"type":"boolean","default":true},"include_image":{"type":"boolean","default":true},"settle_ms":{"type":"integer","default":80,"minimum":0,"maximum":1000,"description":"Post-action wait before capture; reobserve slow states, never replay blindly."},"actions":{"type":"array","items":action,"minItems":1,"maxItems":32}},"required":["observation_id","actions","task_id"]}},
@@ -4391,6 +4432,7 @@ fn tools() -> Value {
             Some(
                 "desktop_windows"
                 | "desktop_observe"
+                | "desktop_window_pixels"
                 | "desktop_semantic"
                 | "desktop_semantic_direct",
             ) => (true, false, true),

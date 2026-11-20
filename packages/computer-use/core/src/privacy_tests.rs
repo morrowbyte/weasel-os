@@ -61,6 +61,7 @@ fn disabled_blocks_all_content_entries_before_any_capture_or_image_read() {
     for (tool, args) in [
         ("desktop_observe", json!({"include_image":false,"crop":{"x":0,"y":0,"width":1,"height":1}})),
         ("desktop_windows", json!({})),
+        ("desktop_window_pixels", json!({"window_id":42})),
         ("desktop_semantic", json!({"window_id":42,"query":SECRET})),
         ("desktop_semantic_direct", json!({"window_id":42,"include_text_selection":true,"background":true})),
     ] {

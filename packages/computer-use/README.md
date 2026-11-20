@@ -385,8 +385,17 @@ monitor. Neither serves as the actor's automatic background readback.
 A fixed [portal window cast](https://github.com/niri-wm/niri/blob/8ed0da44d974c32c6877d2f4630c314da0717ecb/src/dbus/mutter_screen_cast.rs#L238-L260)
 can provide visual observation with user-selected sharing. Niri documents
 [frame delivery limits](https://github.com/niri-wm/niri/blob/8ed0da44d974c32c6877d2f4630c314da0717ecb/src/niri.rs#L4691-L4701)
-for occluded windows. The actor currently implements window-scoped semantic
-readback. A canvas without accessible actions needs an application API or an
+for occluded windows. The agent-first VM can opt into the pinned
+`window-capture/package.nix` derivation for both its running compositor and the
+actor's `niri` CLI dependency. Then `desktop_window_pixels({window_id})`
+renders that window's most recently committed surfaces into a PNG in memory.
+The call bounds the longest edge to 1920 pixels and the PNG to 4 MiB. Lock,
+blanking, an inactive TTY seat, a capture protection rule or a missing renderer
+refuses the request. No photo is placed in a file or clipboard. A new sample
+can show an unchanged buffer when an occluded app stops drawing. This read-only
+image has no action token or mapping to the seat pointer.
+
+A canvas without accessible actions needs an application API or an
 instance opened in the private agent workspace for independent seat input.
 Existing windows stay on their original seat. The actor sends no global
 background key or pointer events and never focuses a window to simulate this route.
