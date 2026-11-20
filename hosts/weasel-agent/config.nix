@@ -21,7 +21,7 @@
   users.users.operator.isNormalUser = true;
   services.greetd = {
     enable = true;
-    settings.default_session.command = "${pkgs.greetd}/bin/agreety --cmd ${pkgs.niri}/bin/niri-session";
+    settings.default_session.command = "${pkgs.greetd}/bin/agreety --cmd ${config.programs.niri.package}/bin/niri-session";
   };
   virtualisation.vmVariant = {
     virtualisation = {
@@ -35,13 +35,15 @@
       qemu.virtioKeyboard = true;
       qemu.options = [ "-vga none -device virtio-gpu-pci" ];
     };
-    services.greetd.settings.initial_session = {
+    services.greetd.settings.default_session = {
       user = "operator";
-      command = toString (
-        import ./vm-session.nix {
-          inherit pkgs;
-          niri = config.programs.niri.package;
-        }
+      command = lib.mkForce (
+        toString (
+          import ./vm-session.nix {
+            inherit pkgs;
+            niri = config.programs.niri.package;
+          }
+        )
       );
     };
   };
