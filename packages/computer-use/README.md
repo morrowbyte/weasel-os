@@ -358,16 +358,35 @@ acceptance matrix and demo; builds and fixtures alone do not complete acceptance
 ### Direct actions while the human uses another window
 
 `desktop_semantic_direct({window_id, background:true})` requests object-targeted
-click/edit handles. Use those handles with `desktop_act` and an observation of
-the target output. These actions call AT-SPI directly; they do not request
-focus, simulate keys, move the pointer or replace the clipboard. Physical input
-in another window does not invalidate this route. Input overlapping the actual
-target window, changed window/output identity, changed semantic context, an
-unavailable Escape monitor, task cancellation or incomplete semantics still
-refuse dispatch. The existing foreground mode remains available for explicit
-focus and keyboard/pointer work. Do not mix background actions with those
-actions when independent operation is required. A named app action can itself
-change focus; verify the result instead of promising universal focus isolation.
+click/edit handles. An actionable result includes a window-bound `observation_id`.
+Pass it and the handle to `desktop_act`. The target may be on an inactive
+workspace. The toolkit must still expose a unique AT-SPI window and a complete
+SHOWING subtree for mutation. The existing output observation remains usable for a
+target on its active workspace. A window observation grants only object actions
+on its own window. Each background batch addresses exactly one window.
 
-This route requires the updated actor and actual app acceptance. Source tests
-are not proof of live app behavior or independent OS input seats.
+With `observe_after:true` the response carries a fresh AT-SPI observation of
+that window, including its current tree and readiness. A PNG of the person's
+active workspace is unnecessary. Inspect the buffer readback or the tree for the
+requested outcome. A named button action can itself open a dialog or activate
+another window. The actor observes Niri's window-focus events across each
+dispatch and reports an uncertain/failed effect if the focus changes or the
+stream becomes unavailable. Already dispatched effects can persist. Niri may
+coalesce changes, and the stream only covers compositor-reported toplevel focus
+through the bounded readback. Ordinary typing in another window can continue.
+Cancellation and loss of the physical Escape monitor still stop subsequent input.
+
+#### Pixel-only windows
+
+The project pins Niri 26.04. Its [screenshot by window ID](https://github.com/niri-wm/niri/blob/8ed0da44d974c32c6877d2f4630c314da0717ecb/src/input/mod.rs#L764-L786)
+can render a mapped window on another workspace. Its [save path](https://github.com/niri-wm/niri/blob/8ed0da44d974c32c6877d2f4630c314da0717ecb/src/niri.rs#L5665-L5679)
+also writes the PNG to the shared clipboard. Output screencopy addresses a
+monitor. Neither serves as the actor's automatic background readback.
+A fixed [portal window cast](https://github.com/niri-wm/niri/blob/8ed0da44d974c32c6877d2f4630c314da0717ecb/src/dbus/mutter_screen_cast.rs#L238-L260)
+can provide visual observation with user-selected sharing. Niri documents
+[frame delivery limits](https://github.com/niri-wm/niri/blob/8ed0da44d974c32c6877d2f4630c314da0717ecb/src/niri.rs#L4691-L4701)
+for occluded windows. The actor currently implements window-scoped semantic
+readback. A canvas without accessible actions needs an application API or an
+instance opened in the private agent workspace for independent seat input.
+Existing windows stay on their original seat. The actor sends no global
+background key or pointer events and never focuses a window to simulate this route.

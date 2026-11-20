@@ -1632,3 +1632,5 @@ Der erste echte Lauf zeigte wiederholt neu gestartete Online-Kopien der aktiven 
 ## 2026-11-17: Preserve active generated theme baseline
 
 Saved the already-live GTK3/GTK4 DMS-generated colors and comment-only DMS windowrules header without changing their bytes or runtime state. Verified canonical out-of-store bindings, stable file hashes/ownership, no open file handles, and exact equality of the evaluated laptop drv to the running system drv. Original/live bytes and exact diff are retained in the private daily receipt; no rebuild or switch was needed for this baseline.
+
+- 2026-11-20 — Existing Niri windows: use the AT-SPI window observation ID for cross-workspace object actions and post-readback. Niri's window screenshot writes the shared clipboard. Validate focus changes with EventStream, including switch-away-and-back. Source check: `git diff --check`. Rust/real-window validation assigned to the shared Boat integration.
