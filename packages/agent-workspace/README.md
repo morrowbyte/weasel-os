@@ -50,6 +50,13 @@ zurückgewiesen.
 Die Ausgabe hat 1280 × 720 Pixel bei Skalierung 1. Koordinaten beginnen links
 oben bei (0, 0). Ein Screenshot darf auch im gesperrten Zustand erfolgen.
 
+`key` verwendet eine virtuelle US-PC-Tastatur im privaten Seat. So erhält
+eine Anwendung für `Ctrl+s` die üblichen Tastencodes für Strg und S.
+Explizites `Shift` bleibt beim Haupttastendruck aktiv. Für XKB-Symbole,
+die auf der Karte weder direkt noch mit Shift erreichbar sind, trägt der
+Helfer das gewünschte Symbol für diesen Aufruf auf F24 ein. `text` sendet
+Unicode weiterhin über wtype.
+
 ## Einmalaufträge und Abbruch
 
 ```sh

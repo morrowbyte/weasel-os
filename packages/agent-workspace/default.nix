@@ -5,6 +5,7 @@
   pkg-config,
   wayland-scanner,
   wayland,
+  libxkbcommon,
   wlr-protocols,
   python3,
   bubblewrap,
@@ -42,7 +43,7 @@ stdenv.mkDerivation {
     pkg-config
     wayland-scanner
   ];
-  buildInputs = [ wayland ];
+  buildInputs = [ wayland libxkbcommon ];
   dontConfigure = true;
   buildPhase = ''
     runHook preBuild
@@ -50,13 +51,17 @@ stdenv.mkDerivation {
     wayland-scanner client-header "$protocol" pointer-protocol.h
     wayland-scanner private-code "$protocol" pointer-protocol.c
     $CC -Wall -Wextra -Werror pointer.c pointer-protocol.c -o workspace-pointer $(pkg-config --cflags --libs wayland-client)
+    protocol=${wtype.src}/protocol/virtual-keyboard-unstable-v1.xml
+    wayland-scanner client-header "$protocol" keyboard-protocol.h
+    wayland-scanner private-code "$protocol" keyboard-protocol.c
+    $CC -Wall -Wextra -Werror keyboard.c keyboard-protocol.c -o workspace-keyboard $(pkg-config --cflags --libs wayland-client xkbcommon)
     runHook postBuild
   '';
   installPhase = ''
     runHook preInstall
     dir="$out/libexec/weasel-workspace"
     mkdir -p "$dir" "$out/bin"
-    cp *.py workspace-pointer sway.conf passwd group resolv.conf "$dir/"
+    cp *.py workspace-pointer workspace-keyboard sway.conf passwd group resolv.conf "$dir/"
     substituteInPlace "$dir/broker.py" \
       --replace-fail '@fastWtype@' '${fastWtype}/bin/wtype' \
       --replace-fail '@dbusConf@' '${dbus}/share/dbus-1/session.conf'

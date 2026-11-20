@@ -30,7 +30,7 @@ def chord(value):
     if (len(modifiers) != len(set(modifiers)) or set(modifiers) - MODIFIERS
             or not re.fullmatch(r"[A-Za-z0-9_]{1,64}", key)):
         raise ValueError("expected [Ctrl+][Shift+][Alt+][Logo+][AltGr+]XKB_KEY")
-    return [arg for modifier in modifiers for arg in ("-M", modifier)] + ["-k", key]
+    return [key, *modifiers]
 
 
 def validate(action):

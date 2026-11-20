@@ -73,12 +73,12 @@ async def act(action, typing_mode):
     if name in ("text", "key"):
         if not any(w["focused"] for w in await windows()):
             raise RuntimeError("no focused application in this workspace")
-        # One stdin keymap chunk in wtype 0.4 holds up to 100 characters.
-        wtype = FAST_WTYPE if typing_mode == "fast" and len(args[0]) <= 100 else "wtype"
         if name == "text":
+            # One stdin keymap chunk in wtype 0.4 holds up to 100 characters.
+            wtype = FAST_WTYPE if typing_mode == "fast" and len(args[0]) <= 100 else "wtype"
             await run(wtype, "-", data=args[0].encode())
         else:
-            await run(wtype, *chord(args[0]))
+            await run(HERE / "workspace-keyboard", *chord(args[0]))
     else:
         await outputs()
         await run(HERE / "workspace-pointer", name, *map(str, args))
