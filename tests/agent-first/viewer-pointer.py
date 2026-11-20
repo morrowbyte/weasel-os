@@ -130,11 +130,16 @@ def verify_viewer_pointer() -> None:
         assert page[3] + page[1] + 60 < gutter < height, (page, gutter)
         assert (press_count("viewer.wl"), press_count("editor.wl")) == (0, 0)
         click(x, y, width, height)
+        # The tablet and keyboard are independent QEMU devices. Wait for the
+        # click to reach the editor before typing at the newly placed cursor.
+        release = r"wl_pointer[@#][0-9]+\.button\([^)]*, 272, 0\)"
+        wait_for("grep -Eq " + shlex.quote(release) + " " + shlex.quote(root + "/editor.wl"))
         machine.send_chars("x")
         result = "\n" * 6 + "M" * 10 + "x" + "M" * 20 + "\n"
         save_input(result)
         assert (press_count("viewer.wl"), press_count("editor.wl")) == (1, 1)
         click(x, gutter, width, height)
+        wait_for("test \"$(grep -Ec " + shlex.quote(release) + " " + shlex.quote(root + "/viewer.wl") + ")\" -eq 2")
         machine.send_chars("y")
         save_input(result.replace("x", "xy"))
         assert (press_count("viewer.wl"), press_count("editor.wl")) == (2, 1)
