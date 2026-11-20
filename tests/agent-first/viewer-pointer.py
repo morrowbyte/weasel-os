@@ -28,9 +28,9 @@ def verify_viewer_pointer() -> None:
         machine.send_key("ctrl-s")
         wait_for("printf %s " + shlex.quote(expected) + " | cmp -s - " + shlex.quote(document))
 
-    def color_box(color):
+    def color_box(color, fuzz="10%"):
         geometry = subprocess.check_output([
-            "magick", str(shot), "-fuzz", "10%", "-fill", "black", "+opaque", color,
+            "magick", str(shot), "-fuzz", fuzz, "-fill", "black", "+opaque", color,
             "-fill", "white", "-opaque", color, "-format", "%@", "info:",
         ], text=True)
         box = re.fullmatch(r"(\d+)x(\d+)\+(\d+)\+(\d+)", geometry)
@@ -96,7 +96,7 @@ def verify_viewer_pointer() -> None:
         prior = None
         while True:
             machine.screenshot(str(shot))
-            glyphs, page = color_box(ink), color_box(paper)
+            glyphs, page = color_box(ink), color_box(paper, "0%")
             if (glyphs, page) == prior and glyphs[0] > 90 and glyphs[1] >= 5 and 490 <= page[0] <= 610:
                 break
             assert time.monotonic() < deadline, ("editor colors or narrow geometry", glyphs, page, layout)
