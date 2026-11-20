@@ -1,11 +1,12 @@
 # Desktop-Benchmarks auf der Projekt-Boat
 
-Stand 20. November 2026. Die ersten drei Modellversuche sollten im geöffneten
-Mousepad-Dokument den Liefertermin von Monday auf Friday ändern und daneben
-`Handover-Friday.txt` speichern. In allen drei Versuchen fehlte die Kopie.
-Das Original und die Kontrolldatei stimmten bytegenau, im Vordergrund kam
-`draftAB\n` an und der aufgezeichnete Niri-Fokus blieb bis zur Prüfmarke
-auf dem Entwurfsfenster. Die schnellste erfolgreiche Erledigung ist damit offen.
+Stand 20. November 2026. GPT-6.2 Sol / Ultrafast hat eine Rechnung im
+bereits geöffneten GTK-Dateidialog umbenannt. Vom Modellauftrag bis zur
+unabhängigen Bestätigung vergingen 65,274 s. Die Bearbeitung des Liefertermins
+im offenen Mousepad-Dokument ist weiterhin offen. Auf demselben Driver
+speicherte GPT-6.1 Terra / Priority die Kopie unter dem richtigen Namen mit
+dem Text `Fridayy.`. In beiden Läufen blieben der Vordergrundentwurf und
+sein Fokus erhalten.
 
 ## Dokument bearbeiten und als Kopie speichern
 
@@ -125,3 +126,24 @@ neue Rechnungsname in der Liste zu sehen. Die unabhängige Prüfung fand den
 neuen Namen mit den ursprünglichen Rechnungsbytes, den erwarteten
 Inventar-Hash, den korrekten Vordergrundentwurf und durchgehenden Fokus.
 Die Vorprobe zählt separat von den unbeeinflussten Modellstichproben.
+
+### Unabhängiger GUI-Lauf im Speichern-unter-Dialog
+
+Sol Ultrafast (low) benannte die Rechnung im frischen Gast auf Driver v7 um
+und überprüfte den neuen Namen in der Dateiliste. Einen abgewiesenen
+Rechtsklick mit numerischem Button-Wert korrigierte das Modell im selben
+Versuch. Die Abschlussprüfung fand genau `Invoice-118.txt` und
+`Inventory.txt` mit den erwarteten SHA-256-Werten. Im Vordergrund kam
+`draftAB\n` an, der Niri-Fokus blieb beim Entwurf.
+
+| Versuch | Auftrag bis unabhängiges Urteil | Modellantworten / äußere Toolaufrufe | Zeit in äußeren Tools | Codex-Zeit außerhalb der Tools | Gast-CLI gesamt | Driver gesamt inkl. Prüfung |
+|---|---:|---:|---:|---:|---:|---:|
+| files-gui-v2 | 65,274 s | 8 / 8 | 52,125 s | 12,446 s | 2.509 ms | 3.765 ms |
+
+Der Gast beobachtete die korrekten Dateien **49,415 s nach Beginn des ersten
+Gastaufrufs** und **341 ms nach Beginn des auslösenden Compose-Aufrufs**.
+Beide Werte enden beim selben Dateibeleg. Der Driver prüfte danach den
+Vordergrund und übermittelte das Urteil. Die abschließende Modellantwort
+lag 67,245 s nach der T3-Anforderung vor. Für diesen Versuch waren
+Mousepad und Dialog geöffnet, genau ein QEMU-Gast aktiv und die
+Übertragungsgröße je Bildblock auf 8.100 Bytes gesetzt.
