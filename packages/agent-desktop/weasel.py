@@ -29,7 +29,7 @@ FIELD_LABELS = {
     "steps": "Scrollschritte",
 }
 CHOICE_LABELS = {
-    "zed": "Zed", "chrome": "Google Chrome", "left": "Links", "middle": "Mitte",
+    "zed": "Zed", "chrome": "Chromium / Chrome", "left": "Links", "middle": "Mitte",
     "right": "Rechts", "up": "Nach oben", "down": "Nach unten",
 }
 PRIVATE_GATE_HELP = {

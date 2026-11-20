@@ -4,6 +4,7 @@ let
   driver = pkgs.callPackage ../packages/cua-driver-bin.nix { };
   actor = pkgs.callPackage ../packages/computer-use {
     inherit niri;
+    agentFirstLaunch = true;
     cua-driver = driver;
   };
   indicator = pkgs.callPackage ../packages/computer-use-indicator { inherit niri; };
@@ -50,6 +51,8 @@ in
     pkgs.jq
     pkgs.ripgrep
     pkgs.foot
+    pkgs.chromium
+    pkgs.zed-editor
     pkgs.fuzzel
     pkgs.mousepad
     pkgs.wl-clipboard

@@ -159,8 +159,22 @@ class Desktop:
         elif name == "app_launch":
             pid = receipt["effects"][0]["details"]["spawn"]["pid"]
             before_ids = {w["id"] for w in observation["windows"]}
-            verified = pid is not None and any(
-                w["pid"] == pid and w["id"] not in before_ids for w in after.get("windows", []))
+            deadline = asyncio.get_running_loop().time() + 10
+            windows = after.get("windows", [])
+            while True:
+                matches = [w for w in windows if pid is not None and w["pid"] == pid and w["id"] not in before_ids]
+                if matches:
+                    receipt["mapped_window"] = {"id": matches[0]["id"], "pid": pid, "app_id": matches[0]["app_id"]}
+                    verified = True
+                    break
+                if pid is None or self.indicator.returncode is not None or asyncio.get_running_loop().time() >= deadline:
+                    verified = False
+                    break
+                await asyncio.sleep(0.08)
+                state = await self.call("desktop_status")
+                if state["session_id"] != self.session or state["epoch"] != self.epoch:
+                    raise ActionError("Start unterbrochen; Anwendung kann bereits laufen", receipt)
+                windows = (await self.call("desktop_windows"))["windows"]
         else:
             verified = (after.get("focused_window") or {}).get("id") == target
             if name == "workspace_focus":
