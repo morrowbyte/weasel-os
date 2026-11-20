@@ -26,7 +26,15 @@ def verify_viewer_pointer() -> None:
 
     def save_input(expected):
         machine.send_key("ctrl-s")
-        wait_for("printf %s " + shlex.quote(expected) + " | cmp -s - " + shlex.quote(document))
+        try:
+            wait_for("printf %s " + shlex.quote(expected) + " | cmp -s - " + shlex.quote(document))
+        except Exception:
+            machine.log("Actual pointer document: " + repr(run("cat", document)))
+            for logname in ("viewer.wl", "editor.wl"):
+                machine.log(logname + " " + run("sh", "-c", "grep -E 'wl_pointer[@#].*(motion|button|enter)' "
+                                                + shlex.quote(root + "/" + logname) + " | tail -8"))
+            machine.screenshot("viewer-pointer-unexpected")
+            raise
 
     def color_box(color, fuzz="10%"):
         geometry = subprocess.check_output([
