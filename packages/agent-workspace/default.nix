@@ -29,6 +29,11 @@
 }:
 let
   fonts = makeFontsConf { fontDirectories = [ dejavu_fonts ]; };
+  # The private seat has no EIS endpoint. In Xwayland 24.1.14, failed EI
+  # setup clears the saved XTEST handler before forwarding the first event.
+  privateXwayland = xwayland.overrideAttrs (previous: {
+    mesonFlags = previous.mesonFlags ++ [ "-Dxwayland_ei=false" ];
+  });
   # This binary is private to the broker. Keep the compositor roundtrips
   # for press and release and keep wtype's UTF-8 stdin/keymap handling.
   fastWtype = wtype.overrideAttrs (previous: {
@@ -86,7 +91,7 @@ stdenv.mkDerivation {
     substituteInPlace "$dir/sandbox.py" \
       --replace-fail '@bwrap@' '${bubblewrap}/bin/bwrap' \
       --replace-fail '@slirp@' '${slirp4netns}/bin/slirp4netns' \
-      --replace-fail '@xwayland@' '${xwayland}/bin/Xwayland' \
+      --replace-fail '@xwayland@' '${privateXwayland}/bin/Xwayland' \
       --replace-fail '@cert@' '${cacert}/etc/ssl/certs/ca-bundle.crt' \
       --replace-fail '@shell@' '${bash}/bin/bash' \
       --replace-fail '@env@' '${coreutils}/bin/env' \
