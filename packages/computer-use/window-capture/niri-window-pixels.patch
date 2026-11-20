@@ -56,25 +56,35 @@
      /// Get the configured keyboard layouts.
 --- a/src/ipc/client.rs
 +++ b/src/ipc/client.rs
-@@ -43,6 +43,7 @@
+@@ -43,6 +43,17 @@
          },
          Msg::Workspaces => Request::Workspaces,
          Msg::Windows => Request::Windows,
-+        Msg::WindowPixels { id } => Request::WindowPixels { id: *id },
++        Msg::WindowPixels { id } => {
++            use std::os::fd::AsFd;
++            use std::os::unix::fs::FileTypeExt;
++
++            let fd = std::io::stdout().as_fd().try_clone_to_owned()?;
++            let target = std::fs::File::from(fd).metadata()?.file_type();
++            if json || !(target.is_fifo() || target.is_socket()) {
++                bail!("window pixels require a binary output pipe or socket");
++            }
++            Request::WindowPixels { id: *id }
++        }
          Msg::Layers => Request::Layers,
          Msg::KeyboardLayouts => Request::KeyboardLayouts,
          Msg::EventStream => Request::EventStream,
-@@ -111,6 +112,16 @@
+@@ -111,6 +122,16 @@
      let response = reply.map_err(|err_msg| anyhow!(err_msg).context("niri returned an error"))?;
  
      match msg {
 +        Msg::WindowPixels { id } => {
-+            use std::io::{stdout, IsTerminal, Write};
++            use std::io::{stdout, Write};
 +            let Response::WindowPixels { id: sampled, png } = response else {
 +                bail!("wrong reply to window pixel request");
 +            };
-+            if sampled != id || json || stdout().is_terminal() {
-+                bail!("window pixel reply requires the matching ID and a binary output pipe");
++            if sampled != id {
++                bail!("wrong window ID in pixel reply");
 +            }
 +            stdout().lock().write_all(&png)?;
 +        }
