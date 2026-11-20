@@ -27,7 +27,9 @@ FIELD_LABELS = {
     "network": "Netzwerkzugang", "program": "Ausführbares Programm", "argv": "Argumente als JSON-Liste (optional)",
     "wait_window": "Exakte Wayland-App-ID des neuen Fensters", "key": "Taste oder Tastenkürzel",
     "x": "X-Koordinate", "y": "Y-Koordinate", "button": "Maustaste", "direction": "Scrollrichtung",
-    "steps": "Scrollschritte",
+    "steps": "Scrollschritte", "filename": "Dateiname",
+    "source": "Bisheriger Dateiname", "destination": "Neuer Dateiname",
+    "session": "Sitzungskennung (optional)",
 }
 CHOICE_LABELS = {
     "zed": "Zed", "chrome": "Chromium / Chrome", "left": "Links", "middle": "Mitte",
@@ -91,8 +93,8 @@ def action_label(spec):
 async def pick_args(spec):
     args = {}
     for key, field in spec["inputSchema"]["properties"].items():
-        if key == "if_sha256":
-            continue  # The interactive viewer always requests a full frame.
+        if key in ("if_sha256", "session"):
+            continue  # The palette acts on the current session and requests full frames.
         label = FIELD_LABELS[key]
         if key in ("window_id", "workspace_id"):
             args[key] = await pick_id(key)
@@ -156,6 +158,15 @@ async def palette():
         elif images:
             viewer = await asyncio.create_subprocess_exec("imv", "-", stdin=asyncio.subprocess.PIPE)
             await viewer.communicate(base64.b64decode(images[0]["data"]))
+        elif action == "private_exchange_list":
+            listing = row["result"]
+            rows = listing["entries"] or ["Keine sichtbaren Dateinamen"]
+            if listing["truncated"]:
+                rows = [*rows, "Weitere Einträge möglich (Inventargrenze erreicht)"]
+            await show("Austauschordner", rows)
+        elif action == "private_exchange_rename_noreplace":
+            receipt = row["result"]
+            await show("Datei umbenannt", [f"{receipt['source']} → {receipt['destination']}"])
         elif action == "private_start":
             session = row["result"]
             network = "Netzwerkzugang erlaubt" if session["network"] else "Offline"

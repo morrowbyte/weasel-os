@@ -17,26 +17,37 @@ BWRAP = "@bwrap@"
 SLIRP = "@slirp@"
 
 
+@contextlib.contextmanager
 def exchange_dir(value):
+    if value is None:
+        yield None, None
+        return
     path = Path(value).absolute()
-    if path.is_symlink():
-        raise ValueError("exchange must be a real, dedicated directory")
     path.mkdir(mode=0o700, exist_ok=True)
-    path = path.resolve(strict=True)
-    info = path.stat()
-    if info.st_uid != os.getuid() or not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077:
-        raise ValueError("exchange must be a private directory owned by this user (0700)")
-    protected = [Path.home().resolve(), Path(os.environ["XDG_RUNTIME_DIR"]).resolve()]
-    if any(p.is_relative_to(path) for p in protected) or path.is_relative_to(protected[1] / "weasel-workspace"):
-        raise ValueError("exchange overlaps the home or workspace control directory")
-    marker = path / ".weasel-workspace-exchange"
-    if not marker.exists():
-        if any(path.iterdir()):
-            raise ValueError("first use of an exchange directory requires an empty directory")
-        marker.touch(mode=0o600, exist_ok=False)
-    if marker.is_symlink() or not marker.is_file() or marker.stat().st_uid != os.getuid():
-        raise ValueError("invalid exchange marker")
-    return path
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        # Validate the very directory bubblewrap receives, even if its host name changes.
+        path = Path(os.readlink(f"/proc/self/fd/{fd}"))
+        info = os.fstat(fd)
+        if info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise ValueError("exchange must be a private directory owned by this user (0700)")
+        protected = [Path.home().resolve(), Path(os.environ["XDG_RUNTIME_DIR"]).resolve()]
+        if any(p.is_relative_to(path) for p in protected) or path.is_relative_to(protected[1] / "weasel-workspace"):
+            raise ValueError("exchange overlaps the home or workspace control directory")
+        marker = ".weasel-workspace-exchange"
+        try:
+            info = os.stat(marker, dir_fd=fd, follow_symlinks=False)
+        except FileNotFoundError:
+            with os.scandir(fd) as entries:
+                if next(entries, None) is not None:
+                    raise ValueError("first use of an exchange directory requires an empty directory")
+            os.close(os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600, dir_fd=fd))
+        else:
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+                raise ValueError("invalid exchange marker")
+        yield str(path), fd
+    finally:
+        os.close(fd)
 
 
 def sandbox_args(gate_dir, exchange, network):
@@ -50,8 +61,8 @@ def sandbox_args(gate_dir, exchange, network):
             "--ro-bind", "@cert@", "/etc/ssl/certs/ca-certificates.crt",
             "--perms", "0700", "--dir", "/run/workspace", "--ro-bind", gate_dir, "/run/gate",
             "--perms", "0700", "--dir", "/home/workspace", "--chdir", "/home/workspace"]
-    if exchange:
-        args.extend(["--bind", exchange, "/exchange"])
+    if exchange is not None:
+        args.extend(["--bind-fd", str(exchange), "/exchange"])
     if network:
         args.extend(["--ro-bind", HERE / "resolv.conf", "/etc/resolv.conf"])
     env = {
@@ -91,9 +102,9 @@ def network_helper(pid, owner, log):
             raise RuntimeError("private network setup failed")
 
 
-def spawn(paths, options, probe):
+def spawn(paths, options, exchange_fd, probe):
     """Caller holds the per-name lifecycle lock. Keep the lifetime flock in bwrap."""
-    args = sandbox_args(paths.base / "gate", options["exchange"], options["network"])
+    args = sandbox_args(paths.base / "gate", exchange_fd, options["network"])
     with socket.socket(socket.AF_UNIX) as listener, paths.live.open("a+b") as live, \
             tempfile.TemporaryFile(dir=paths.base) as log, pipe() as (info, report):
         fcntl.flock(live, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -102,8 +113,11 @@ def spawn(paths, options, probe):
         listener.listen(32)
         args.extend(["--info-fd", str(report.fileno()), "--sync-fd", str(live.fileno()),
                      "--", str(Path(sys.executable).resolve()), "-I", HERE / "broker.py"])
+        inherited = [report.fileno(), live.fileno()]
+        if exchange_fd is not None:
+            inherited.append(exchange_fd)
         proc = subprocess.Popen(args, stdin=listener, stdout=subprocess.DEVNULL, stderr=log,
-                                env={}, pass_fds=[report.fileno(), live.fileno()], start_new_session=True)
+                                env={}, pass_fds=inherited, start_new_session=True)
         listener.close()
         report.close()
         initfd = None

@@ -18,6 +18,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from actions import MAX_REPLY, MAX_REQUEST, MAX_SECONDS, identifier, validate_batch
+from exchange import OPERATIONS
 from presentation import open_window
 from sandbox import exchange_dir, spawn
 
@@ -93,13 +94,20 @@ class BrokerError(RuntimeError):
         self.reply = reply
 
 
-def rpc(paths, request, timeout=MAX_SECONDS + 5):
+def rpc(paths, request, timeout=MAX_SECONDS + 5, *, bind_running=False):
     line = json.dumps(request, ensure_ascii=False).encode() + b"\n"
     if len(line) > MAX_REQUEST:
         raise ValueError("request exceeds 64 KiB")
     with socket.socket(socket.AF_UNIX) as peer:
         peer.settimeout(timeout)
-        peer.connect(str(paths.sock))
+        if bind_running:
+            # Connect under the lifecycle lock. A restart cannot redirect this socket.
+            with locked(paths.directory):
+                if not paths.running():
+                    raise RuntimeError("workspace is stopped")
+                peer.connect(str(paths.sock))
+        else:
+            peer.connect(str(paths.sock))
         try:
             peer.sendall(line)
             with peer.makefile("rb") as stream:
@@ -146,10 +154,17 @@ def start(paths, args):
             actual = json.loads(paths.options.read_bytes())
             if args.exchange and str(Path(args.exchange).resolve()) != actual["exchange"] or args.network and not actual["network"]:
                 raise ValueError("already running with different rights; stop before changing them")
-            return {**rpc(paths, {"op": "status"}), **actual}
-        if args.exchange:
-            options["exchange"] = str(exchange_dir(args.exchange))
-        result = spawn(paths, options, lambda: rpc(paths, {"op": "status"}, timeout=13))
+            request = {"op": "status"}
+            if args.exchange:
+                info = os.stat(args.exchange, follow_symlinks=False)
+                request["verify_exchange"] = [info.st_dev, info.st_ino]
+            status = rpc(paths, request)
+            if args.exchange and not status.pop("exchange_verified", False):
+                raise ValueError("running broker cannot confirm exchange identity; stop before changing rights")
+            return {**status, **actual}
+        with exchange_dir(options["exchange"]) as (path, fd):
+            options["exchange"] = path
+            result = spawn(paths, options, fd, lambda: rpc(paths, {"op": "status"}, timeout=13))
         save(paths.options, options)
         return {**result, **options}
 
@@ -231,6 +246,11 @@ def execute(args):
             result = (rpc(paths, {"op": op}, timeout=4) | json.loads(paths.options.read_bytes())
                       if paths.running() else {"running": False})
             return {**result, "paused": json.loads((base / "gate/state").read_bytes())["paused"]}
+    if op in OPERATIONS:
+        gate = json.loads((base / "gate/state").read_bytes())
+        return rpc(paths, {"op": op, "names": [getattr(args, key) for key in OPERATIONS[op]],
+                           "epoch": gate["epoch"], "job": uuid.uuid4().hex,
+                           "session": args.session}, bind_running=True)
     if not paths.running():
         raise RuntimeError("workspace is stopped")
     if op == "screenshot":
@@ -279,6 +299,11 @@ def main():
         commands.add_parser(name)
     for name in ("batch", "cancel"):
         commands.add_parser(name).add_argument("job")
+    for operation, fields in OPERATIONS.items():
+        command = commands.add_parser(operation)
+        command.add_argument("--session", help="require the same running exchange session")
+        for field in fields:
+            command.add_argument(field)
     commands.add_parser("screenshot").add_argument("file")
     for name, description in (("open", "-- PROGRAM [ARG ...]"), ("key", "CHORD"), ("text", "TEXT"),
                               ("wait-window", "APP_ID"), ("click", "X Y [BUTTON]"),

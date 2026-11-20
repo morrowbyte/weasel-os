@@ -11,20 +11,22 @@ from pathlib import Path
 from subprocess import DEVNULL, PIPE
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import exchange
 from presentation import Presentation
 from actions import MAX_REQUEST, MAX_SECONDS, chord, identifier, validate_batch
 
 HERE = Path(__file__).resolve().parent
 RUNTIME = Path("/run/workspace")
+GATE = Path("/run/gate")
 FAST_WTYPE = "@fastWtype@"
 IPC_HEADER = struct.Struct("=6sII")
 GET_OUTPUTS = 3
 GET_TREE = 4
 
 
-async def run(*args, data=None):
+async def run(*args, data=None, pass_fds=()):
     proc = await asyncio.create_subprocess_exec(
-        *args, stdin=PIPE if data is not None else DEVNULL, stdout=PIPE, stderr=PIPE)
+        *args, stdin=PIPE if data is not None else DEVNULL, stdout=PIPE, stderr=PIPE, pass_fds=pass_fds)
     try:
         out, err = await proc.communicate(data)
     finally:
@@ -109,7 +111,10 @@ async def act(action, typing_mode):
 
 
 class Broker:
-    def __init__(self):
+    def __init__(self, exchange_fd=None):
+        self.exchange_fd = exchange_fd
+        self.session = uuid.uuid4().hex
+        self.closing = False
         self.active = None
         self.view = None
         self.job_id = None
@@ -118,7 +123,7 @@ class Broker:
 
     @staticmethod
     def gate():
-        return json.loads(Path("/run/gate/state").read_bytes())
+        return json.loads((GATE / "state").read_bytes())
 
     def admitted(self):
         gate = self.gate()
@@ -142,7 +147,15 @@ class Broker:
     async def dispatch(self, request, reader, progress):
         op = request["op"]
         if op == "status":
-            return {"running": True, "output": await outputs(), "windows": await windows(),
+            verified = {}
+            if "verify_exchange" in request:
+                if self.exchange_fd is None:
+                    raise ValueError("workspace has no exchange grant")
+                info = os.fstat(self.exchange_fd)
+                if request["verify_exchange"] != [info.st_dev, info.st_ino]:
+                    raise ValueError("exchange identity changed; stop before changing rights")
+                verified["exchange_verified"] = True
+            return {**verified, "running": True, "output": await outputs(), "windows": await windows(),
                     "job": self.job_id, "view_open": self.view is not None,
                     "manual_input": bool(self.view and self.view.manual)}
         if op == "gate":
@@ -155,6 +168,7 @@ class Broker:
                 await self.view.revoke()
             return {"interrupted": stopped}
         if op == "stop":
+            self.closing = True
             if self.active:
                 self.active.cancel()
             if self.view:
@@ -169,7 +183,23 @@ class Broker:
             return {"cancelled": wanted}
         if self.active:
             raise RuntimeError(f"workspace busy (job {self.job_id})")
-        if op == "batch":
+        if op in exchange.OPERATIONS:
+            if self.closing or self.exchange_fd is None:
+                raise ValueError("no running private exchange grant")
+            if request.get("session") not in (None, self.session):
+                raise ValueError("private exchange session changed")
+            names = request["names"]
+            exchange.validate(op, names)
+            job = identifier(request["job"])
+            if op == "exchange-rename-noreplace":
+                if self.view and self.view.manual:
+                    raise RuntimeError("workspace in manual use; unfocus or close its view")
+                gate = self.gate()
+                if gate["paused"] or gate["epoch"] != request["epoch"]:
+                    raise RuntimeError("input paused or admission expired")
+                self.epoch = gate["epoch"]
+            work = self.exchange_operation(op, names)
+        elif op == "batch":
             if self.view and self.view.manual:
                 raise RuntimeError("workspace in manual use; unfocus or close its view")
             job = identifier(request["job"])
@@ -212,6 +242,11 @@ class Broker:
                 task.cancel()
             await asyncio.gather(self.active, *guards, return_exceptions=True)
             self.active = self.job_id = self.epoch = None
+
+    async def exchange_operation(self, operation, names):
+        out = await run(sys.executable, "-I", HERE / "exchange.py", str(self.exchange_fd),
+                        GATE, operation, self.epoch or "", *names, pass_fds=(self.exchange_fd,))
+        return {**json.loads(out), "session": self.session, "job": self.job_id}
 
     async def capture(self):
         await outputs()
@@ -299,7 +334,12 @@ async def serve():
                 await asyncio.sleep(0.05)
     except Exception as exc:
         raise RuntimeError(f"private desktop startup failed: {exc}; {tail.decode(errors='replace')}") from exc
-    broker = Broker()
+    # Only an explicit bind creates /exchange. Pin it before serving any app/client.
+    try:
+        exchange_fd = os.open("/exchange", exchange.DIRECTORY)
+    except FileNotFoundError:
+        exchange_fd = None
+    broker = Broker(exchange_fd)
     async with await asyncio.start_unix_server(broker.client, sock=listener, limit=MAX_REQUEST):
         watchers = [asyncio.create_task(p.wait()) for p in (bus, sway, seat)]
         watchers.append(asyncio.create_task(broker.stopping.wait()))

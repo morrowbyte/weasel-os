@@ -23,7 +23,7 @@ stdenvNoCC.mkDerivation {
   installPhase = ''
     runHook preInstall
     install -Dm644 -t "$out/libexec/weasel" *.py
-    install -Dm644 README.md "$out/share/doc/weasel/README.md"
+    install -Dm644 -t "$out/share/doc/weasel" README.md EXCHANGE.md
     mkdir -p "$out/bin"
     makeWrapper ${python3}/bin/python3 "$out/bin/weasel" \
       --add-flags "-EsB $out/libexec/weasel/weasel.py" \

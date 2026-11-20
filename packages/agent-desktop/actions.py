@@ -6,6 +6,7 @@ import os
 import re
 import sqlite3
 import tempfile
+import time
 import uuid
 from contextlib import AsyncExitStack, closing
 from pathlib import Path
@@ -43,6 +44,20 @@ async def workspace(name, *args, payload=None):
         raise ActionError(result.get("error") or err.decode(errors="replace")[:1000]
                           or f"Workspace lieferte keinen Beleg (Exit {process.returncode})", result)
     return result
+
+async def exchange_action(action, args, sessions):
+    name = args["name"]
+    fields = {"private_exchange_list": (), "private_exchange_lstat": ("filename",),
+              "private_exchange_rename_noreplace": ("source", "destination")}[action]
+    operation = action.removeprefix("private_").replace("_", "-")
+    expected = args["session"] or sessions.get(name)
+    if name in sessions and sessions[name] != expected:
+        raise ValueError("Austauschordner gehört zu einer anderen Sitzung")
+    binding = ["--session", expected] if expected else []
+    values = ["--", *(args[key] for key in fields)] if fields else []
+    receipt = await workspace(name, operation, *binding, *values)
+    sessions[name] = receipt["session"]
+    return receipt
 
 async def open_private(name, args):
     app_id = args["wait_window"]
@@ -212,6 +227,7 @@ async def execute(steps, request_id=None):
     if request_id is not None:
         reserve(request_id)
     records = []
+    exchange_sessions = {}
     images = []
     status = "completed"
     async with AsyncExitStack() as stack:
@@ -219,6 +235,7 @@ async def execute(steps, request_id=None):
         while len(records) < len(actions):
             index = len(records)
             action, args = actions[index]
+            started_ns = time.monotonic_ns() if action.startswith("private_exchange_") else None
             try:
                 if desktop.indicator is not None and desktop.indicator.returncode is not None:
                     raise ActionError("Desktop-Auftrag wurde beendet")
@@ -231,7 +248,9 @@ async def execute(steps, request_id=None):
                         status = "partial" if any(r["ok"] for r in records) else "stopped"
                         break
                     continue
-                if action.startswith("private_"):
+                if started_ns is not None:
+                    value = await exchange_action(action, args, exchange_sessions)
+                elif action.startswith("private_"):
                     value = await private(action, args, images)
                 elif action in ("windows", "workspaces"):
                     value = (await desktop.call("desktop_windows"))[action]
@@ -250,5 +269,8 @@ async def execute(steps, request_id=None):
                                 "receipt": getattr(exc, "receipt", None)})
                 status = "partial" if prior else "stopped"
                 break
+            finally:
+                if started_ns is not None and len(records) > index:
+                    records[index]["duration_ns"] = time.monotonic_ns() - started_ns
     return ({"status": status, "request_id": request_id, "steps": records, "remaining": len(actions) - len(records),
              "automatic_replay": False}, images)

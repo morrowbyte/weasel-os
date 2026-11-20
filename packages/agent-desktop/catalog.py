@@ -18,6 +18,10 @@ def obj(fields, required=None):
 
 ID = integer(1, 2**63 - 1)
 NAME = string(32, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$", default="default")
+SESSION = string(32, minLength=0, pattern=r"^(?:[0-9a-f]{32})?$", default="",
+                 description="Optionale Sitzungskennung aus einem früheren Austauschbeleg.")
+FILENAME = string(255, pattern=r"^(?!\.)[^/\x00-\x1f\x7f]+$",
+                  description="Sichtbarer Dateiname direkt im Austauschordner, bis zu 255 UTF-8-Bytes.")
 X, Y = integer(0, 1279), integer(0, 719)
 ARGV = {"type": "array", "items": {**string(32768), "minLength": 0},
         "maxItems": 127, "default": []}
@@ -52,6 +56,12 @@ CATALOG = {
                                        "description": "Optionaler Host-Ordner, privat eingebunden unter /exchange."},
                              network={"type": "boolean", "default": False,
                                       "description": "Ausgehenden Netzwerkzugang für die Sitzung zulassen."}),
+    "private_exchange_list": private("Dateinamen im Austauschordner anzeigen", read_only=True,
+                                     session=SESSION),
+    "private_exchange_lstat": private("Dateimetadaten im Austauschordner anzeigen", read_only=True,
+                                      filename=FILENAME, session=SESSION),
+    "private_exchange_rename_noreplace": private("Datei im Austauschordner ohne Überschreiben umbenennen",
+                                                source=FILENAME, destination=FILENAME, session=SESSION),
     "private_status": private("Private Arbeitsfläche prüfen", read_only=True),
     "private_editor": private("Texteditor auf der privaten Arbeitsfläche öffnen"),
     "private_open": private("Programm auf privater Arbeitsfläche öffnen",
@@ -110,6 +120,12 @@ def validate(action_id, args):
         if not valid_value(value, spec):
             raise ValueError(f"{action_id}: ungültiges oder fehlendes Argument {key}")
         result[key] = value
+    if action_id.startswith("private_exchange_"):
+        for key in ("filename", "source", "destination"):
+            if key in result and (not result[key].isprintable() or len(result[key].encode()) > 255):
+                raise ValueError(f"{action_id}: ungültiger Dateiname {key}")
+        if "source" in result and result["source"] == result["destination"]:
+            raise ValueError("Quell- und Zielname müssen verschieden sein")
     if action_id == "private_open":
         if len(result["wait_window"].encode()) > 255:
             raise ValueError("private_open: Wayland-App-ID höchstens 255 UTF-8-Bytes")
