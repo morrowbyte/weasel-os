@@ -143,6 +143,10 @@ class Desktop:
             action = {"kind": "focus", "window_id": target}
         request = {"task_id": self.task_id, "observation_id": observation["observation_id"],
                    "actions": [action], "include_image": False, "observe_after": True}
+        if background:
+            # The AT-SPI write reads the exact buffer back before it returns.
+            # Take the independent post-action tree immediately after that receipt.
+            request["settle_ms"] = 0
         if target is not None:
             request["window_id"] = target
         receipt = await self.call("desktop_act", request)
