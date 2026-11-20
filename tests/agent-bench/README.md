@@ -100,3 +100,9 @@ ein. Die Restzeit enthält Modell und Harness. Die Zustellung vor dem
 Codex-Auftragsstart wird über die T3-Zeitstempel separat angegeben. Private
 Rollouts bleiben am Ursprungsort. Für einen abgebrochenen Lauf kann der
 Auswerter auf die ID der letzten belegten Toolantwort begrenzt werden.
+
+Für den privaten Bildtransport gibt `bench.py image RUN ANFRAGE_ID OFFSET`
+jeweils bis zu 3072 ursprüngliche PNG-Bytes als Base64 zurück. Beim Lesen
+den gemeldeten `next`-Offset verwenden, Dateigröße und SHA-256 über alle
+Teile abgleichen. Das zusammengesetzte PNG dem zuständigen Modell als Bild
+übergeben. Bilddaten gehören ausschließlich in den privaten Bildkanal.
