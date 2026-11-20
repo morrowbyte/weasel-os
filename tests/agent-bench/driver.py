@@ -16,6 +16,8 @@ BENCH = HOME + "/bench"
 APP = "bench"
 ALLOWED = {"private_status", "private_screenshot", "private_key", "private_text",
            "private_click", "private_scroll"}
+if MODE == "files-os":
+    ALLOWED |= {"private_exchange_list", "private_exchange_lstat", "private_exchange_rename_noreplace"}
 assert FAMILY in {"edit", "files"}
 assert ROOT.stat().st_uid == os.getuid() and ROOT.stat().st_mode & 0o077 == 0
 
@@ -137,17 +139,14 @@ def dispatch(request):
     steps = request["steps"]
     if not isinstance(steps, list) or not 1 <= len(steps) <= 32:
         raise ValueError("expected 1 through 32 actions")
-    file_call = MODE == "files-os" and all(step["action"] in {"list", "lstat", "rename-noreplace"} for step in steps)
-    if not file_call:
-        for step in steps:
-            if step["action"] not in ALLOWED:
-                raise ValueError("action outside prepared workspace")
-            step.setdefault("args", {})["name"] = APP
+    for step in steps:
+        if step["action"] not in ALLOWED:
+            raise ValueError("action outside prepared workspace")
+        step.setdefault("args", {})["name"] = APP
     if sum(s["action"] == "private_screenshot" for s in steps) > 1:
         raise ValueError("one screenshot per request")
     payload = shlex.quote(json.dumps({"steps": steps, "id": request_id}))
-    operation = "files-api" if file_call else "compose"
-    response = json.loads(machine.succeed(operator("printf %s " + payload + " | " + helper(operation)), timeout=110))
+    response = json.loads(machine.succeed(operator("printf %s " + payload + " | " + helper("compose")), timeout=110))
     product = response["product"]
     if "screenshot" in product:
         machine.copy_from_machine(BENCH + "/" + product["screenshot"])

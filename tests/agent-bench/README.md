@@ -108,14 +108,21 @@ den gemeldeten `next`-Offset verwenden, Dateigröße und SHA-256 über alle
 Teile abgleichen. Das zusammengesetzte PNG dem zuständigen Modell als Bild
 übergeben. Bilddaten gehören ausschließlich in den privaten Bildkanal.
 
-## Freigegebene Dateiverwaltung mit Betriebssystemwerkzeugen
+## Freigegebene Dateiverwaltung über das Produkt
 
 `start DRIVER RUN files-os` öffnet dasselbe Rechnungs-Fixture wie `files`.
-Zusätzlich zu GUI-Aktionen akzeptiert ein separater Compose-Aufruf eine Folge
-von `list` (keine Argumente), `lstat` (`name`) und `rename-noreplace` (`from`,
-`to`). Die Auswahl des Werkzeugs liegt beim Modell. Die Operationen laufen
-als `operator` im Gast. Sämtliche Namen beziehen sich direkt auf den
-freigegebenen Austauschordner. Das Backend verwendet einen Verzeichnis-FD,
-`lstat`-Semantik und Linux `renameat2(RENAME_NOREPLACE)`. Die GUI-only-Modi
-bieten diese Dateifunktionen nicht an. Jede Teiloperation meldet ihre
-Dauer. Die abschließende Prüfung bleibt unabhängig und identisch zu `files`.
+Das Modell kann im selben `weasel compose`-Aufruf GUI-Aktionen und die
+paketierten `private_exchange_*`-Aktionen wählen. Jeder Schritt wird im
+Gast an die benannte Arbeitsfläche `bench` gebunden.
+
+| Produktaktion | Modellargumente | Beleg unter `steps[i].result` |
+|---|---|---|
+| `private_exchange_list` | keine | `entries` und `truncated` |
+| `private_exchange_lstat` | `filename` | `name`, `inode`, `bytes`, `mode` |
+| `private_exchange_rename_noreplace` | `source`, `destination` | `source`, `destination`, `renamed` |
+
+Die GUI-only-Modi erlauben nur die privaten Desktop-Aktionen. Für die
+Dateioperationen wird derselbe Produktpfad wie bei CLI- und MCP-Nutzung
+aufgerufen. Seine Teilbelege liefern `duration_ns`. Der unabhängige
+Prüfer kontrolliert die Dateinamen, die ursprünglichen Bytes, den
+Vordergrundentwurf und den Fokus über den Testdriver.

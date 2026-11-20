@@ -1,9 +1,7 @@
 """Runs as operator inside the disposable NixOS guest, outside the private app."""
-import ctypes
 import hashlib
 import json
 import os
-import stat
 import subprocess
 import sys
 import time
@@ -65,69 +63,6 @@ def watch(family):
         time.sleep(0.02)
 
 
-def file_name(value):
-    if not isinstance(value, str) or not value or value.startswith(".") or "/" in value or "\0" in value:
-        raise ValueError("expected a visible filename directly inside the exchange directory")
-    return value
-
-
-def file_operations(request):
-    fields = {"list": set(), "lstat": {"name"}, "rename-noreplace": {"from", "to"}}
-    steps = request["steps"]
-    for step in steps:
-        args = step.get("args", {})
-        if step["action"] not in fields or not isinstance(args, dict) or set(args) != fields[step["action"]]:
-            raise ValueError("invalid scoped file action or arguments")
-        for value in args.values():
-            file_name(value)
-
-    libc = ctypes.CDLL(None, use_errno=True)
-    rename = libc.renameat2
-    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-    rename.restype = ctypes.c_int
-    directory = os.open(EXCHANGE, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    records = []
-    started = time.monotonic_ns()
-    try:
-        # Keep filesystem request IDs separate from user-controlled exchange names.
-        with (ROOT / ("fs-request-" + request["id"])).open("x"):
-            pass
-        for step in steps:
-            action, args = step["action"], step.get("args", {})
-            before = time.monotonic_ns()
-            try:
-                if action == "list":
-                    value = sorted(n for n in os.listdir(directory) if not n.startswith("."))
-                else:
-                    name = args["name"] if action == "lstat" else args["from"]
-                    info = os.stat(name, dir_fd=directory, follow_symlinks=False)
-                    value = {"name": name, "inode": info.st_ino, "bytes": info.st_size,
-                             "mode": stat.filemode(info.st_mode)}
-                    if action == "rename-noreplace":
-                        if not stat.S_ISREG(info.st_mode):
-                            raise ValueError("expected an ordinary source file")
-                        if name == args["to"]:
-                            raise ValueError("expected two different names")
-                        # Linux RENAME_NOREPLACE atomically protects an existing destination.
-                        if rename(directory, os.fsencode(name), directory, os.fsencode(args["to"]), 1):
-                            err = ctypes.get_errno()
-                            raise OSError(err, os.strerror(err))
-                        value["name"] = args["to"]
-                records.append({"action": action, "ok": True, "result": value,
-                                "duration_ns": time.monotonic_ns() - before})
-            except (ValueError, OSError) as exc:
-                records.append({"action": action, "ok": False, "error": str(exc),
-                                "duration_ns": time.monotonic_ns() - before})
-                break
-    finally:
-        os.close(directory)
-    ok = records[-1]["ok"]
-    status = "completed" if ok else ("partial" if len(records) > 1 else "stopped")
-    return {"guest_start_ns": started, "guest_end_ns": time.monotonic_ns(), "cli_exit": int(not ok),
-            "product": {"status": status, "steps": records, "remaining": len(steps) - len(records),
-                        "request_id": request["id"], "automatic_replay": False}}
-
-
 def compose():
     request = json.load(sys.stdin)
     start = time.monotonic_ns()
@@ -161,8 +96,6 @@ def main():
         return
     if action == "compose":
         print(json.dumps(compose()))
-    elif action == "files-api" and family == "files":
-        print(json.dumps(file_operations(json.load(sys.stdin))))
     elif action == "verify":
         files = snapshot()
         effect_path = ROOT / "effect-ns"
