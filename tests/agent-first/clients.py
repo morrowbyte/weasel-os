@@ -178,7 +178,7 @@ with tempfile.TemporaryDirectory(prefix="codex-backend-") as directory:
             expected = json.loads(expected_json)
             assert expected.items() <= observed.items(), (expected, observed)
             skills = rpc(5, "skills/list", {"cwds": [directory]})
-            assert any(skill["name"] == "weasel-desktop" and skill.get("enabled", True)
+            assert any(skill["name"] == "weasel-desktop" and skill["scope"] == "admin" and skill["enabled"]
                        for entry in skills["data"] for skill in entry["skills"]), skills
             print(json.dumps({"backend": binary, "userAgent": hello["userAgent"],
                               "readOnlyTool": "weasel_os.windows", "matchedWindows": expected,
@@ -214,7 +214,14 @@ for backend_label, backend_path in [
                 json.dumps(client_ids),
             ]
         )
-        receipt = machine.succeed(operator(command))
+        try:
+            receipt = machine.succeed(operator(command))
+        except Exception:
+            machine.log(machine.succeed(
+                "free -m; cat /proc/pressure/memory; ps -eo rss,nlwp,comm --sort=-rss | head -18; "
+                "stat -c '%F %a' /etc/codex/skills/weasel-desktop/SKILL.md"
+            ))
+            raise
         machine.log(receipt.strip())
 
 with subtest("Start the pinned browser and editor through the same action available to agents"):
