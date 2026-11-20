@@ -24,6 +24,7 @@
     settings.default_session.command = "${pkgs.greetd}/bin/agreety --cmd ${config.programs.niri.package}/bin/niri-session";
   };
   virtualisation.vmVariant = {
+    imports = [ ./vm-graphical.nix ];
     virtualisation = {
       memorySize = 4096;
       cores = 2;

@@ -12,6 +12,7 @@ window-rule {
 binds {
     Super+Space hotkey-overlay-title="System actions" { spawn "weasel" "palette"; }
     Super+D hotkey-overlay-title="Applications" { spawn "fuzzel"; }
+    Super+Shift+D hotkey-overlay-title="Gemeinsam nutzbare App öffnen" { spawn "weasel-agent-launcher"; }
     Super+Return hotkey-overlay-title="Terminal" { spawn "foot"; }
     Super+E hotkey-overlay-title="Text editor" { spawn "mousepad"; }
     Super+F1 hotkey-overlay-title="Keyboard shortcuts" { show-hotkey-overlay; }

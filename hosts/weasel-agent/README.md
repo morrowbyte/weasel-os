@@ -16,6 +16,7 @@ Die QEMU-VM verwendet eine virtuelle Grafikausgabe. Weston stellt dafür einen M
 | --- | --- |
 | Super+Space | Systemaktion suchen |
 | Super+D | Installierte Anwendung starten |
+| Super+Umschalt+D | Eine App zur gemeinsamen Nutzung öffnen oder eine laufende private Sitzung wieder anzeigen |
 | Super+Return | Terminal öffnen |
 | Super+E | Mousepad öffnen |
 | Super+F1 | Tastenkürzel anzeigen |

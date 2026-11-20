@@ -23,7 +23,10 @@ testers.runNixOSTest {
   name = "agent-first-desktop";
 
   nodes.machine = { config, pkgs, ... }: {
-    imports = [ ../../modules/agent-first.nix ];
+    imports = [
+      ../../modules/agent-first.nix
+      ../../hosts/weasel-agent/vm-graphical.nix
+    ];
     users.users.operator.isNormalUser = true;
     services.greetd = {
       enable = true;
@@ -66,6 +69,8 @@ testers.runNixOSTest {
     + builtins.readFile ./pixels.py
     + "\n"
     + builtins.readFile ./presentation.py
+    + "\n"
+    + builtins.readFile ./managed-launch.py
     + "\n"
     + builtins.readFile ./clients.py;
 }

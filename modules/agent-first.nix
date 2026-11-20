@@ -47,6 +47,7 @@ in
     indicator
     desktop
     workspace
+    (pkgs.callPackage ../packages/agent-launcher { inherit workspace; })
     pkgs.git
     pkgs.jq
     pkgs.ripgrep
