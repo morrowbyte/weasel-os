@@ -72,9 +72,10 @@ def prepare():
               shlex.quote('any(.windows[]; .focused and (.title | contains("' + filename + '")))'))
     # GTK's actual file chooser supplies the file-management surface in this family.
     if FAMILY == "files":
-        workspace("key", "Ctrl+o")
+        # GTK hides its Rename context action in OPEN mode; SAVE exposes it in Browse.
+        workspace("key", "Ctrl+Shift+s")
         wait_user("weasel-workspace --name bench status | jq -e " +
-                  shlex.quote('any(.windows[]; .focused and (.title | test("open|öffnen"; "i")))'))
+                  shlex.quote('any(.windows[]; .focused and (.title | test("save|speichern"; "i")))'))
     draft = ('IFS= read -r line; printf "%s\\n" "$line" > "$HOME/bench/draft"; '
              "printf '\\033]2;draft-complete\\007'; exec sleep infinity")
     run("niri", "msg", "action", "spawn", "--", "foot", "--app-id=bench-draft",

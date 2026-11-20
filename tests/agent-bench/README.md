@@ -18,7 +18,8 @@ eigene Beispieldaten und emulierte Vordergrundtastatur im Gast.
 
 Die erste Aufgabe läuft im Texteditor Mousepad, die zweite im GTK-Dateidialog
 dieser App. Im Gast liegt der Ordner unter `/exchange` im privaten Desktop.
-Die Dateiaufgabe prüft die Entfernung des alten Namens und den Erhalt des
+Für die Dateiaufgabe öffnet der Runner den Speichern-unter-Dialog, dessen
+Dateiliste die GTK-Aktion Umbenennen anbietet. Die Dateiaufgabe prüft die Entfernung des alten Namens und den Erhalt des
 Rechnungsinhalts. Beim Editieren müssen die ursprünglichen Bytes, Leerzeilen,
 Referenznummer, Schlussumbruch und eine weitere Datei erhalten bleiben.
 Die unabhängige Prüfung vergleicht den gesamten Ordner bytegenau. Der Austauschmarker

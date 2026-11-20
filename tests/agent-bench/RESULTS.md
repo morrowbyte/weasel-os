@@ -1,6 +1,6 @@
 # Desktop-Benchmarks auf der Projekt-Boat
 
-Stand 20. November 2026. Die drei bisherigen Modellversuche sollten im geöffneten
+Stand 20. November 2026. Die ersten drei Modellversuche sollten im geöffneten
 Mousepad-Dokument den Liefertermin von Monday auf Friday ändern und daneben
 `Handover-Friday.txt` speichern. In allen drei Versuchen fehlte die Kopie.
 Das Original und die Kontrolldatei stimmten bytegenau, im Vordergrund kam
@@ -73,3 +73,24 @@ Dateiaufgabe startete nach der Kontrolle, dass genau ein QEMU-Gast aktiv war.
 Für diesen Versuch übertrug das private Boat-Relay Bilder in Blöcken von
 8.100 statt 2.400 Bytes. Damit hat sich auch der Transportaufwand beim
 Betrachten von Bildern gegenüber den drei Dokumentversuchen geändert.
+
+### Erster Modellversuch im Öffnen-Dialog
+
+Terra Priority erreichte das unabhängige Urteil nach **23,011 s**.
+Das Initialbild zeigte die Rechnung in Zeile zwei. Terra klickte innerhalb
+dieser Zeile und bündelte F2, Ctrl+A, den neuen Dateinamen und Enter mit
+dem Klick. Der Broker quittierte alle fünf Aktionen in **420 ms**.
+Terra forderte nach der Aktionsfolge kein weiteres Bild an. Das ursprüngliche
+Rechnungsdokument existierte unter seinem alten Namen und Hash, die Zieldatei
+fehlte. Inventar, Entwurf und Fokus waren korrekt.
+
+| Versuch | Modellantworten / äußere Toolaufrufe | Zeit in äußeren Tools | Codex-Zeit außerhalb der Tools | Gast-CLI gesamt | Driver gesamt inkl. Prüfung |
+|---|---:|---:|---:|---:|---:|
+| files-seat-probe | 4 / 4 | 13,246 s | 9,203 s | 841 ms | 1.379 ms |
+
+**Der gewählte Dialog war für diese Aufgabe ungeeignet.** GTK 3.24.52 blendet
+seinen Kontextmenüeintrag Umbenennen im Öffnen-Modus ausdrücklich aus. Der
+Modellversuch dokumentiert einen Fehler im Benchmark-Aufbau. Für folgende
+Vergleiche öffnet der Runner den Speichern-unter-Dialog. Für die GUI-Prüfung
+muss dort die Dateiliste mit verfügbarer Umbenennen-Aktion belegt sein.
+[GTK-Quellcode zu den Dialogmodi](https://github.com/GNOME/gtk/blob/3.24.52/gtk/gtkfilechooserwidget.c#L2365-L2372)
