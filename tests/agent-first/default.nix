@@ -67,6 +67,8 @@ testers.runNixOSTest {
   testScript =
     lib.replaceStrings [ "@draft@" ] [ "${draft}" ] (builtins.readFile ./desktop.py)
     + "\n"
+    + builtins.readFile ./private-clipboard.py
+    + "\n"
     + lib.replaceStrings [ "@xterm@" ] [ "${pkgs.xterm}/bin/xterm" ] (builtins.readFile ./legacy-app.py)
     + "\n"
     + builtins.readFile ./drag.py
