@@ -95,6 +95,12 @@ except Exception:
 with subtest("Set up a Mousepad background target and an active foot draft on Niri"):
     # Dismiss Niri's first-login hotkey overlay before any draft is open.
     machine.send_key("spc", delay=0.15)
+    machine.wait_until_succeeds(operator("systemctl --user is-active graphical-session.target"), timeout=20)
+    portal_version = machine.succeed(operator(
+        "busctl --user get-property org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop "
+        "org.freedesktop.portal.FileChooser version"
+    )).split()
+    assert portal_version[0] == "u" and int(portal_version[1]) > 0, portal_version
     machine.wait_until_succeeds(operator(
         """weasel-computer-use call desktop_status '{}' | jq -e '.content[0].text | fromjson | .resume_input_readiness.ready'"""
     ), timeout=30)
