@@ -73,7 +73,9 @@ testers.runNixOSTest {
     + "\n"
     + builtins.readFile ./presentation.py
     + "\n"
-    + lib.replaceStrings [ "magick" ] [ "${pkgs.imagemagick}/bin/magick" ] (builtins.readFile ./viewer-pointer.py)
+    + lib.replaceStrings [ "magick" ] [ "${pkgs.imagemagick}/bin/magick" ] (
+      builtins.readFile ./viewer-pointer.py
+    )
     + "\n"
     + builtins.readFile ./managed-launch.py
     + "\n"

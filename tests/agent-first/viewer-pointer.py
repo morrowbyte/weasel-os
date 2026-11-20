@@ -6,6 +6,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 
 def verify_viewer_pointer() -> None:
@@ -38,14 +39,16 @@ def verify_viewer_pointer() -> None:
 
     def click(x, y, width, height):
         assert 0 <= x < width and 0 <= y < height
-        qmp.send("input-send-event", {"events": [
+        motion: dict[str, Any] = {"events": [
             {"type": "abs", "data": {"axis": axis, "value": round(value * 32767 / (size - 1))}}
             for axis, value, size in (("x", x, width), ("y", y, height))
-        ]})
+        ]}
+        qmp.send("input-send-event", motion)
         for down in (True, False):
-            qmp.send("input-send-event", {"events": [
+            button: dict[str, Any] = {"events": [
                 {"type": "btn", "data": {"button": "left", "down": down}}
-            ]})
+            ]}
+            qmp.send("input-send-event", button)
 
     def press_count(filename):
         # Counts presses delivered by the respective compositor to this client.
