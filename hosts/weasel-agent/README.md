@@ -10,6 +10,12 @@ Im ausgecheckten weasel-os-Repository auf einem grafischen x86_64-Linux-Rechner 
 nix run --no-write-lock-file .#weasel-agent
 ```
 
+Für den Start direkt aus dem Featurezweig:
+
+```sh
+nix run 'github:morrowbyte/weasel-os?ref=feature/agent-first-os#weasel-agent'
+```
+
 Die QEMU-VM verwendet eine virtuelle Grafikausgabe. Weston stellt dafür einen Monitor mit Software-Rendering bereit, Niri verwaltet die Benutzerfenster. Für einen eigenen NixOS-Rechner lässt sich das exportierte Modul `nixosModules.agent-first` mit dessen vorhandener Hardware-, Benutzer- und Anmeldekonfiguration kombinieren.
 
 | Taste | Aktion |
@@ -61,6 +67,8 @@ weasel-workspace --name bericht stop
 Mit `weasel-workspace --name bericht view` lässt sich eine laufende Sitzung als Niri-Fenster öffnen. Solange dieses Fenster den Fokus hat, bedienst du den privaten Desktop selbst. Wechselst du zu einem anderen Fenster, kann der Agent an derselben App weiterarbeiten. Schließt du das Ansichtsfenster, bleibt die private App bis `stop` geöffnet.
 
 Ein neues Austauschverzeichnis beginnt leer. Programme mit Netzzugriff benötigen bei Sitzungsstart `--network`. Einmalaufträge erhalten eine eindeutige ID. Nach einem Abbruch zeigt ein frischer Blick in Datei oder Fenster, welche Schritte bereits wirksam waren.
+
+Für Dokumente und App-Einstellungen, die einen Gastneustart überdauern sollen, starte die Arbeitsfläche mit `weasel-workspace --name bericht start --persistent`. Öffne sie später mit demselben Befehl. Die Programme erhalten dann wieder ihr eigenes Home. Austauschordner und Netzwerk wählst du bei jedem Start separat.
 
 ## Reproduzierbare Abnahme
 
