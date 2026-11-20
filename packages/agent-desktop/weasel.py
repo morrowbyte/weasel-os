@@ -42,7 +42,7 @@ def printable(value):
     return "".join(ch if ch.isprintable() else " " for ch in str(value))
 
 async def prompt(label, rows=None):
-    options = ["--dmenu", "--prompt", label + " › "]
+    options = ["--dmenu", "--prompt", label + " › ", "--width", "70"]
     if rows is not None:
         if not rows:
             raise ValueError("Keine Ziele vorhanden")
@@ -67,6 +67,15 @@ async def show(label, rows):
     # The result view is read-only. Return and Escape both dismiss it.
     await prompt(label, rows or ["Keine Einträge"])
 
+def target_labels(source, items):
+    if source == "windows":
+        return [f"{w.get('title') or w.get('app_id') or 'Fenster'}  ·  "
+                f"{w.get('app_id') or 'App'}  ·  #{w['id']}"
+                + ("  ·  aktiv" if w.get("is_focused") else "") for w in items]
+    return [f"{w.get('name') or w['idx']}  ·  {w.get('output') or 'Ausgabe'}  ·  #{w['id']}"
+            + ("  ·  aktiv" if w.get("is_focused") else "") for w in items]
+
+
 async def pick_id(key):
     source = "workspaces" if key == "workspace_id" else "windows"
     result, _ = await execute([{"action": source}])
@@ -74,11 +83,7 @@ async def pick_id(key):
     if not step["ok"]:
         raise ValueError(step["error"])
     items = step["result"]
-    if source == "windows":
-        labels = [f"{w['id']}  {w.get('app_id', '')}  {w.get('title', '')}" for w in items]
-    else:
-        labels = [f"{w['id']}  {w.get('output', '')} · {w.get('name') or w['idx']}" for w in items]
-    return items[await prompt(FIELD_LABELS[key], labels)]["id"]
+    return items[await prompt(FIELD_LABELS[key], target_labels(source, items))]["id"]
 
 def action_label(spec):
     return f"{spec['title']}  ·  {FOCUS_LABELS[spec['focus']]}"
@@ -159,6 +164,8 @@ async def palette():
         elif action == "private_open":
             window = row["result"]["window"]
             await show("Privates Fenster geöffnet", [f"{window.get('title') or window['app_id']} · Fenster {window['id']}"])
+        elif action in ("windows", "workspaces"):
+            await show(CATALOG[action]["title"], target_labels(action, row["result"]))
         elif action == "private_cancel_all":
             await show("Private Eingaben gesperrt", ["Gilt für alle privaten Arbeitsflächen."])
         elif action == "private_resume":

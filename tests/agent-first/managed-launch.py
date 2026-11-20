@@ -1,7 +1,7 @@
 # Appended to desktop.py in the operator's Niri guest.
 with subtest("Choose Mousepad by keyboard and present the same private window twice"):
     def choose_private(query: str) -> None:
-        machine.succeed(operator("niri msg action spawn -- weasel-agent-launcher"))
+        machine.send_key("meta_l-shift-d")
         machine.wait_until_succeeds(operator(
             """niri msg --json layers | jq -e 'any(.[]; .namespace == "launcher" or .namespace == "fuzzel")'"""
         ), timeout=30)
