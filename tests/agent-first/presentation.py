@@ -26,7 +26,7 @@ with subtest("Manually edit the same private window, then continue behind a Niri
     viewer_id = int(machine.wait_until_succeeds(operator(
         """niri msg --json windows | jq -er '.[] | select(.is_focused and
         .title == "presentation · Manuelle Eingabe") | .id'"""), timeout=30))
-    conflict_code, conflict = machine.execute(operator(view_cmd("text", "collision")))
+    conflict_code, conflict = machine.execute(operator(view_cmd("text", "collision") + " 2>&1"))
     assert conflict_code != 0 and "manual use" in conflict, conflict
     machine.send_chars("manual")
     machine.send_key("ctrl-a")
