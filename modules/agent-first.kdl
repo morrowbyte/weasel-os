@@ -5,6 +5,10 @@ layout {
         active-color "#71c4ac"
     }
 }
+window-rule {
+    match app-id="^weasel-workspace-view$"
+    default-column-width { proportion 1.0; }
+}
 binds {
     Super+Space hotkey-overlay-title="System actions" { spawn "weasel" "palette"; }
     Super+D hotkey-overlay-title="Applications" { spawn "fuzzel"; }
