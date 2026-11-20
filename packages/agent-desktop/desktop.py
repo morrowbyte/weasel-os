@@ -1,7 +1,6 @@
 """Use one native MCP connection and one owned indicator per sequence."""
 import asyncio
 import json
-import os
 import uuid
 from contextlib import AsyncExitStack
 
@@ -89,7 +88,7 @@ class Desktop:
         self.output = output
         self.indicator = await asyncio.create_subprocess_exec(
             "weasel-computer-use-indicator", "run", "--task-id", self.task_id,
-            "--owner-pid", str(os.getpid()), "--output", output, "--activity", activity,
+            "--output", output, "--activity", activity,
             "--stdin-control", stdin=PIPE, stdout=PIPE)
         self.stack.push_async_callback(finish, self.indicator)
         async with asyncio.timeout(10):

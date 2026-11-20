@@ -14,6 +14,7 @@ def operator(command: str) -> str:
     session = (
         "set -eu -o pipefail; export XDG_RUNTIME_DIR=/run/user/$(id -u); "
         'export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"; '
+        'export WAYLAND_DISPLAY=$(systemctl --user show-environment | sed -n "s/^WAYLAND_DISPLAY=//p"); '
         'set -- "$XDG_RUNTIME_DIR"/niri.*.sock; export NIRI_SOCKET="$1"; '
     )
     return shlex.join(["su", "-", "operator", "-c", session + command])

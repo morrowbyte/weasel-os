@@ -72,5 +72,11 @@ testers.runNixOSTest {
     + "\n"
     + builtins.readFile ./managed-launch.py
     + "\n"
-    + builtins.readFile ./clients.py;
+    + builtins.readFile ./clients.py
+    + ''
+
+      with subtest("Crew's own local provider reads native state and initializes the two system MCP servers"):
+          machine.copy_from_host("${./crew.py}", "/tmp/crew-provider-probe.py")
+          machine.succeed(operator("python3 /tmp/crew-provider-probe.py"), timeout=155)
+    '';
 }

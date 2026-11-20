@@ -51,7 +51,7 @@ async def prompt(label, rows=None):
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
     data = "" if rows is None else "\n".join(printable(v) for v in rows) + "\n"
     output, _ = await process.communicate(data.encode())
-    if process.returncode == 1:
+    if process.returncode == 2:
         raise KeyboardInterrupt
     if process.returncode:
         raise ValueError(f"fuzzel: Exit {process.returncode}")
