@@ -55,6 +55,27 @@ drei Läufe liefern keine Latenz bis zu einem erfolgreichen Dateieffekt.
   unveränderten Bilds. Ein Geschwindigkeitsvorteil eines Modells lässt sich
   aus den erfolglosen Einzelversuchen nicht ableiten.
 
+### Erster Dokumentversuch auf Driver v7
+
+**Die Kopie wurde unter dem richtigen Namen gespeichert. Ein einzelnes
+zusätzliches y blieb stehen.** Die vollständigen Testdaten mit dem Satz
+`Delivery is due on Fridayy.` ergeben exakt den SHA-256 der gespeicherten
+Kopie. Terra hatte die Wortauswahl korrigiert, drei Zeichen gelöscht und
+erneut gespeichert. Im letzten App-Bild lag der Cursor neben dem doppelten y.
+Das Original, die Inventardatei, der geschriebene Entwurf und der Fokus
+bestanden die unabhängige Prüfung. Der vollständige Sollinhalt trat im
+Dateibeobachter nicht auf.
+
+| Versuch | Modell / Tier | Auftrag bis Urteil | Modellantworten / Tools | Äußere Tools | Außerhalb der Tools | Gast-CLI gesamt | Driver inkl. Prüfung |
+|---|---|---:|---:|---:|---:|---:|---:|
+| edit-seat-v4 | Terra / Priority | 60,333 s | 12 / 12 | 40,107 s | 19,521 s | 4.821 ms | 6.431 ms |
+
+Der Gast hatte einen stabil angekündigten privaten Seat und Tastenaliase.
+Das Modell sollte sichtbare Abweichungen vor dem Abschluss selbst korrigieren.
+Ein erster Klick-Aufruf ohne `button` scheiterte an der Argumentprüfung. Die
+anschließenden Produktquittungen und wechselnden App-Bilder zeigten die
+Bearbeitung und die Speicherung.
+
 ## Datei im offenen GTK-Dateidialog umbenennen
 
 Für diese Aufgabe soll das Modell `Invoice-draft.txt` in `Invoice-118.txt`
