@@ -225,6 +225,13 @@ with subtest(
     ), effect
     elapsed = 1000 * (time.perf_counter() - started)
     machine.log(f"Action through target readback, including driver shell transport: {elapsed:.1f} ms")
+    machine.log("Mousepad timings in ms: " + json.dumps({
+        "whole_driver_call": round(elapsed, 2),
+        "actor": result.get("timing_ms"),
+        "dispatch_ack": result["effects"][0].get("dispatch_ack_ms"),
+        "atspi_edit": effect.get("latency_ms"),
+        "fresh_tree": result["after_observation"].get("latency_ms"),
+    }))
     assert effect["focus_events"] == "no_change_observed", effect
     fresh = result["after_observation"]
     assert fresh["niri_window_id"] == target_id, fresh
