@@ -1,6 +1,7 @@
 {
   lib,
   rustPlatform,
+  stdenv,
   makeWrapper,
   niri,
   grim,
@@ -23,6 +24,11 @@ rustPlatform.buildRustPackage {
     WEASEL_VM_CHROMIUM = "${chromium}/bin/chromium";
   };
   nativeBuildInputs = [ makeWrapper ];
+  postCheck = lib.optionalString agentFirstLaunch ''
+    cargo test --locked --offline -j "$NIX_BUILD_CORES" --profile release \
+      --target "${stdenv.hostPlatform.rust.rustcTargetSpec}" --target-dir core/target \
+      --manifest-path weasel-computer-use-atspi/Cargo.toml bounded_bridge_read_tests
+  '';
   postInstall = ''
     mv "$out/bin/weasel-computer-use-core" "$out/bin/weasel-computer-use"
     wrapProgram "$out/bin/weasel-computer-use" \
