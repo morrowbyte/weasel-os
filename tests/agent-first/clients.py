@@ -212,3 +212,16 @@ for backend_label, backend_path in [
         )
         receipt = machine.succeed(operator(command))
         machine.log(receipt.strip())
+
+with subtest("Start the pinned browser and editor through the same action available to agents"):
+    for app in ("chrome", "zed"):
+        command = shlex.join(["weasel", "run", "app_launch", json.dumps({"app": app})])
+        code, output = machine.execute(operator(command), timeout=60)
+        result = json.loads(output)
+        assert code == 0 and result["status"] == "completed", result
+        outcome = result["steps"][0]["result"]
+        assert outcome["verified"] is True, outcome
+        receipt = outcome["receipt"]
+        window = receipt["mapped_window"]
+        assert window["pid"] == receipt["effects"][0]["details"]["spawn"]["pid"]
+        machine.log(f"{app} opened window {window['id']} from the pinned program, app_id={window['app_id']}")

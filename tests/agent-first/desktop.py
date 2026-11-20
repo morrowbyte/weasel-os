@@ -226,7 +226,7 @@ with subtest(
             "desktop_act",
             observation_id=tree["observation_id"],
             window_id=target_id,
-            task_id="vm-background-edit",
+            task_id=f"vm-background-edit-{iteration}",
             actions=[action],
             include_image=False,
             observe_after=True,
