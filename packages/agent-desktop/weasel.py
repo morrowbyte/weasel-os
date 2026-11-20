@@ -124,8 +124,19 @@ async def palette():
     entries = list(CATALOG)
     labels = [action_label(spec) for spec in CATALOG.values()]
     try:
-        index = await prompt("weasel", [*labels, "Hilfe zu einer Aktion"])
+        index = await prompt("weasel", [*labels, "Private Arbeitsfläche als Fenster anzeigen",
+                                       "Hilfe zu einer Aktion"])
         if index == len(entries):
+            args = await pick_args(CATALOG["private_status"])
+            viewer = await asyncio.create_subprocess_exec(
+                "weasel-workspace", "--name", args.get("name", "default"), "view",
+                stderr=asyncio.subprocess.PIPE)
+            _, error = await viewer.communicate()
+            if viewer.returncode:
+                await show("Ansicht geschlossen", [error.decode(errors="replace").strip()
+                                                   or "Die Ansicht konnte nicht geöffnet werden."])
+            return
+        if index == len(entries) + 1:
             await show_action_help(entries[await prompt("Hilfe", labels)])
             return
         action = entries[index]

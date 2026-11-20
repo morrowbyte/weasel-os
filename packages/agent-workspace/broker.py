@@ -10,6 +10,7 @@ from pathlib import Path
 from subprocess import DEVNULL, PIPE
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from presentation import Presentation
 from actions import MAX_REQUEST, MAX_SECONDS, chord, identifier, validate_batch
 
 HERE = Path(__file__).resolve().parent
@@ -88,6 +89,7 @@ async def act(action, typing_mode):
 class Broker:
     def __init__(self):
         self.active = None
+        self.view = None
         self.job_id = None
         self.epoch = None
         self.stopping = asyncio.Event()
@@ -119,17 +121,22 @@ class Broker:
         op = request["op"]
         if op == "status":
             return {"running": True, "output": await outputs(), "windows": await windows(),
-                    "job": self.job_id}
+                    "job": self.job_id, "view_open": self.view is not None,
+                    "manual_input": bool(self.view and self.view.manual)}
         if op == "gate":
             stopped = None
             if self.active and self.epoch is not None and not self.admitted():
                 stopped = self.job_id
                 self.active.cancel()
                 await asyncio.gather(self.active, return_exceptions=True)
+            if self.view and not self.view.admitted(self):
+                await self.view.revoke()
             return {"interrupted": stopped}
         if op == "stop":
             if self.active:
                 self.active.cancel()
+            if self.view:
+                await self.view.revoke()
             return {"stopping": True}
         if op == "cancel":
             wanted = identifier(request["job"])
@@ -141,6 +148,8 @@ class Broker:
         if self.active:
             raise RuntimeError(f"workspace busy (job {self.job_id})")
         if op == "batch":
+            if self.view and self.view.manual:
+                raise RuntimeError("workspace in manual use; unfocus or close its view")
             job = identifier(request["job"])
             gate = self.gate()
             if gate["paused"] or gate["epoch"] != request["epoch"]:
@@ -198,6 +207,16 @@ class Broker:
             if not line or not line.endswith(b"\n") or len(line) > MAX_REQUEST:
                 raise ValueError("incomplete or oversized request")
             request = json.loads(line)
+            if request["op"] == "view":
+                if self.view or self.active:
+                    raise RuntimeError("workspace busy")
+                view = Presentation(request["epoch"])
+                if not view.admitted(self):
+                    raise RuntimeError("input paused or admission expired")
+                self.view = view
+                await view.serve(self, reader, writer)
+                writer.close()
+                return
             if request["op"] == "batch":
                 # Survives cancellation of the worker. Only finished actions
                 # enter results; one started action may have unknown effects.

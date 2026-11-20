@@ -7,6 +7,9 @@
   wayland,
   libxkbcommon,
   wlr-protocols,
+  gtk3,
+  gtk-vnc,
+  wayvnc,
   python3,
   bubblewrap,
   slirp4netns,
@@ -43,7 +46,12 @@ stdenv.mkDerivation {
     pkg-config
     wayland-scanner
   ];
-  buildInputs = [ wayland libxkbcommon ];
+  buildInputs = [
+    wayland
+    libxkbcommon
+    gtk3
+    gtk-vnc
+  ];
   dontConfigure = true;
   buildPhase = ''
     runHook preBuild
@@ -55,13 +63,15 @@ stdenv.mkDerivation {
     wayland-scanner client-header "$protocol" keyboard-protocol.h
     wayland-scanner private-code "$protocol" keyboard-protocol.c
     $CC -Wall -Wextra -Werror keyboard.c keyboard-protocol.c -o workspace-keyboard $(pkg-config --cflags --libs wayland-client xkbcommon)
+    $CC -Wall -Wextra -Werror viewer.c -o workspace-view $(pkg-config --cflags --libs gtk-vnc-2.0 gtk+-3.0)
     runHook postBuild
   '';
   installPhase = ''
     runHook preInstall
     dir="$out/libexec/weasel-workspace"
     mkdir -p "$dir" "$out/bin"
-    cp *.py workspace-pointer workspace-keyboard sway.conf passwd group resolv.conf "$dir/"
+    cp *.py workspace-view workspace-pointer workspace-keyboard sway.conf passwd group resolv.conf "$dir/"
+    substituteInPlace "$dir/presentation.py" --replace-fail '@wayvnc@' '${wayvnc}/bin/wayvnc'
     substituteInPlace "$dir/actions.py" \
       --replace-fail '/run/current-system/sw/lib/libxkbcommon.so.0' '${lib.getLib libxkbcommon}/lib/libxkbcommon.so.0'
     substituteInPlace "$dir/broker.py" \

@@ -18,6 +18,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from actions import MAX_REPLY, MAX_REQUEST, MAX_SECONDS, identifier, validate_batch
+from presentation import open_window
 from sandbox import exchange_dir, spawn
 
 
@@ -239,6 +240,8 @@ def execute(args):
     gate = json.loads((base / "gate/state").read_bytes())
     if gate["paused"]:
         raise RuntimeError("input paused; explicitly resume before starting a new action")
+    if op == "view":
+        open_window(paths, gate["epoch"])
     if op == "batch":
         job = identifier(args.job)
         raw = sys.stdin.buffer.read(MAX_REQUEST + 1)
@@ -272,7 +275,7 @@ def main():
     start_cmd = commands.add_parser("start")
     start_cmd.add_argument("--exchange", metavar="DIR")
     start_cmd.add_argument("--network", action="store_true")
-    for name in ("status", "stop", "cancel-all", "resume"):
+    for name in ("status", "view", "stop", "cancel-all", "resume"):
         commands.add_parser(name)
     for name in ("batch", "cancel"):
         commands.add_parser(name).add_argument("job")

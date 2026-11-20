@@ -24,6 +24,21 @@ zum privaten Namespace. `wait-window` wartet auf ein fokussiertes Fenster mit
 exakt passender Wayland-App-ID. `status` zeigt App-IDs, Titel, Fokus, Ausgabe,
 Rechte, laufenden Auftrag und die Eingabesperre.
 
+## Dieselbe App am Desktop bedienen
+
+Mit `weasel-workspace --name bericht view` öffnest du die laufende private
+Arbeitsfläche als normales Wayland-Fenster auf deinem Desktop. Du siehst
+den gesamten privaten Sway-Ausgang und bedienst seine Apps mit Maus und
+Tastatur. Das Fenster trägt den Sitzungsnamen im Titel. **Manuelle Eingabe**
+zeigt an, dass der Broker die Bedienung freigegeben hat. Solange du dort
+arbeitest, weist er neue Agenteneingaben in dieser Sitzung zurück.
+
+Wechsle in ein anderes Niri-Fenster. Die Ansicht bleibt sichtbar und der
+Agent kann im Hintergrund mit `text`, `key` und den übrigen Workspace-Aktionen
+in derselben privaten App weiterarbeiten. Schließen beendet nur die Ansicht.
+`cancel-all` trennt auch eine offene Ansicht. Nach `resume` kannst du sie
+ausdrücklich neu öffnen. Host und Workspace behalten ihre eigenen Zwischenablagen.
+
 ## Befehle
 
 Der optionale globale Schalter `--name NAME` steht vor dem Befehl. Standard
@@ -36,6 +51,7 @@ zurückgewiesen.
 | `start [--exchange DIR] [--network]` | Startet die Sitzung oder meldet die vorhandene Sitzung mit ihren tatsächlichen Rechten. Rechte werden beim Start festgelegt. |
 | `status` | Prüft den privaten Compositor und listet seine Fenster. |
 | `open -- PROGRAM [ARG ...]` | Startet das Programm im privaten Home. |
+| `view` | Öffnet eine interaktive Ansicht der laufenden Sitzung bis zum Schließen des Fensters. |
 | `wait-window APP_ID` | Wartet höchstens 30 Sekunden auf passenden Fokus. |
 | `screenshot DATEI.png` | Schreibt das vollständige private Bild als neue Datei auf dem Host. |
 | `key Ctrl+Shift+s`, `text TEXT` | Sendet einen XKB-Tastennamen mit optionalen Modifikatoren bzw. Unicode-Text an das fokussierte private Fenster. |

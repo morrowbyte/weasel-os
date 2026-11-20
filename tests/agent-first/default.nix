@@ -65,5 +65,7 @@ testers.runNixOSTest {
     + "\n"
     + builtins.readFile ./pixels.py
     + "\n"
+    + builtins.readFile ./presentation.py
+    + "\n"
     + builtins.readFile ./clients.py;
 }

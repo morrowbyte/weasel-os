@@ -40,6 +40,13 @@ PID-Namespace. Die Zuordnung des Fensters erfolgt über die App-ID und den
 Fensterbestand vor dem Start. Für parallele Starts eignet sich eine je App-Start
 eindeutige App-ID.
 
+Zum manuellen Weiterarbeiten **Private Arbeitsfläche als Fenster anzeigen**
+in der Palette wählen und den Sitzungsnamen angeben. In der Shell öffnet
+`weasel-workspace --name bericht view` dieselbe Ansicht. Nach dem Wechsel in ein
+anderes Niri-Fenster kann der Agent über die privaten Katalogaktionen in der
+laufenden App weiterarbeiten. Beim Schließen der Ansicht bleiben Dokument,
+Prozess und private Fenster-ID erhalten.
+
 Wenn der Start unbelegt bleibt, zuerst mit **Private Arbeitsfläche prüfen**
 oder `private_status` nachsehen. Der Prozess kann trotz fehlendem Fensterbeleg
 bereits laufen. Die Folge stoppt am Fehler und wird nicht automatisch wiederholt.
