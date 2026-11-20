@@ -5,7 +5,9 @@ zwei frischen Gästen erfolgreich umbenannt. Vom Modellauftrag bis zur
 unabhängigen Bestätigung vergingen im GTK-Dateidialog **65,274 s** und bei
 freier Werkzeugwahl mit den paketierten Dateiaktionen **19,425 s**. Auf
 demselben Driver v8 erreichte GPT-6.1 Terra / Priority das identische
-Dateiergebnis nach **16,562 s**. Die
+Dateiergebnis nach **16,562 s**. Auf Driver v10 schloss Sol die Aufgabe
+in **15,252 s** ab. Der warme Produktschritt zur Umbenennung dauerte
+**2,578 ms**. Die
 Bearbeitung des Liefertermins im offenen Mousepad-Dokument ist weiterhin
 offen. Auf dem Driver des GUI-Laufs speicherte GPT-6.1 Terra / Priority
 die Kopie unter dem richtigen Namen mit dem Text `Fridayy.`. In diesen
@@ -212,3 +214,48 @@ auslösenden Compose. Beide Modelle verwendeten zwei Compose-Aufrufe und
 eine unabhängige Abschlussprüfung. Terras Urteil kam in diesem Paar
 2,863 s früher an. Auch die direkten Produktlaufzeiten unterschieden sich
 deutlich. Je eine Beobachtung erlaubt keine belastbare Rangfolge der Modelle.
+
+### Driver v10 mit wiederverwendetem Dateiworker
+
+Sol Ultrafast (low) erhielt denselben Nutzerauftrag mit den gültigen
+Argumentsignaturen der verfügbaren Werkzeuge. Es verwendete dieselben
+Aktionen in derselben Gruppierung wie im v8-Lauf mit freier Werkzeugwahl.
+Die erste Liste zeigte `Inventory.txt` und `Invoice-draft.txt`, die Liste
+nach der Umbenennung zeigte `Inventory.txt` und `Invoice-118.txt`.
+Der unabhängige Prüfer bestätigte die erwarteten Bytes beider Dateien,
+den Entwurf `draftAB\n` und seinen durchgängigen Fokus. Der Einzelversuch
+lief mit einem frischen, exklusiven Gast und geöffnetem Dialog.
+
+| Versuch | Auftrag bis Urteil | Auftrag bis Modellantwort | Modellantworten / äußere Aufrufe bis Urteil | Zeit in äußeren Tools | Codex-Zeit außerhalb der Tools | Gast-CLI gesamt | Driver inkl. Prüfung |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| files-os-warm-v10 | 15,252 s | 16,945 s | 3 / 3 | 6,405 s | 7,795 s | 703 ms | 1.522 ms |
+
+Die erste Liste startete den Dateiworker. Beim nächsten Compose konnte
+der Broker denselben Worker für die Umbenennung und die Kontrollliste
+verwenden. Alle Zeiten der folgenden Tabelle sind direkt gemessene
+Millisekunden. Die Intervalle überlappen sich. Die Dateioperation umfasst
+auch die Validierung und beim Umbenennen die Sperre samt Epochenprüfung.
+
+| Zeitfeld | Erste Liste | Warme Umbenennung | Warme Kontrollliste |
+|---|---:|---:|---:|
+| Gesamter Produktschritt | 105,948 | 2,578 | 2,392 |
+| Client-Zulassungsprüfung | 0,621 | 0,618 | 0,440 |
+| Client-Anfrage bis Antwort | 105,135 | 1,737 | 1,825 |
+| Broker-Verarbeitung | 104,265 | 1,248 | 0,712 |
+| Worker-Anfrage bis Antwort | 103,979 | 0,681 | 0,440 |
+| Workerstart | 103,602 | bereits gestartet | bereits gestartet |
+| Dateioperation im Worker | 0,060 | 0,337 | 0,054 |
+
+| Compose-Aufruf | Gast-CLI gesamt | Python-Eintritt bis Ausführungsbeginn | Ausführung einschließlich aller Schritte |
+|---|---:|---:|---:|
+| Erste Liste | 451,678 ms | 243,343 ms | 108,427 ms |
+| Umbenennung und Kontrollliste | 251,041 ms | 183,818 ms | 5,998 ms |
+
+Der Gast beobachtete den exakten Dateizustand **4,206 s ab dem ersten
+Gastaufruf** und **233,246 ms ab dem auslösenden Compose**. Für Sol
+lagen auf v8 dieselben Messgrenzen bei 8,000 s und 1.140,492 ms.
+Der unabhängig bestätigte Gesamtauftrag dauerte auf v10 in diesem Paar
+4,173 s weniger. Die neue Instrumentierung trennt den Workerstart beim
+ersten Aufruf von der eigentlichen Umbenennung und von den Kosten eines
+neuen CLI-Prozesses. Die beiden Einzelversuche liefern keine Verteilung
+der Laufzeiten.
