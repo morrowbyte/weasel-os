@@ -1,12 +1,13 @@
 # Desktop-Benchmarks auf der Projekt-Boat
 
-Stand 20. November 2026. GPT-6.2 Sol / Ultrafast hat eine Rechnung im
-bereits geöffneten GTK-Dateidialog umbenannt. Vom Modellauftrag bis zur
-unabhängigen Bestätigung vergingen 65,274 s. Die Bearbeitung des Liefertermins
-im offenen Mousepad-Dokument ist weiterhin offen. Auf demselben Driver
-speicherte GPT-6.1 Terra / Priority die Kopie unter dem richtigen Namen mit
-dem Text `Fridayy.`. In beiden Läufen blieben der Vordergrundentwurf und
-sein Fokus erhalten.
+Stand 20. November 2026. GPT-6.2 Sol / Ultrafast hat dieselbe Rechnung in
+zwei frischen Gästen erfolgreich umbenannt. Vom Modellauftrag bis zur
+unabhängigen Bestätigung vergingen im GTK-Dateidialog **65,274 s** und bei
+freier Werkzeugwahl mit den paketierten Dateiaktionen **19,425 s**. Die
+Bearbeitung des Liefertermins im offenen Mousepad-Dokument ist weiterhin
+offen. Auf dem Driver des GUI-Laufs speicherte GPT-6.1 Terra / Priority
+die Kopie unter dem richtigen Namen mit dem Text `Fridayy.`. In allen drei
+Läufen blieben der Vordergrundentwurf und sein Fokus erhalten.
 
 ## Dokument bearbeiten und als Kopie speichern
 
@@ -147,3 +148,35 @@ Vordergrund und übermittelte das Urteil. Die abschließende Modellantwort
 lag 67,245 s nach der T3-Anforderung vor. Für diesen Versuch waren
 Mousepad und Dialog geöffnet, genau ein QEMU-Gast aktiv und die
 Übertragungsgröße je Bildblock auf 8.100 Bytes gesetzt.
+
+### Freie Werkzeugwahl mit paketierten Dateiaktionen
+
+Der Auftrag auf Driver v8 verwendete denselben geöffneten Dialog, dasselbe
+Modell und denselben Tier. Sol rief zuerst `private_exchange_list` auf
+und sah den ursprünglichen Rechnungsnamen. Im zweiten Compose bündelte es
+`private_exchange_rename_noreplace` mit einer weiteren Liste und prüfte die
+beiden Namen. Dafür benötigte es keine Bilder. Der unabhängige Prüfer
+bestätigte denselben vollständigen Dateibestand samt Hashes und
+denselben Vordergrundzustand wie im GUI-Lauf. Alle drei Schritte gelangen
+beim ersten Versuch.
+
+| Versuch | Auftrag bis unabhängiges Urteil | Modellantworten / äußere Toolaufrufe | Zeit in äußeren Tools | Codex-Zeit außerhalb der Tools | Gast-CLI gesamt | Driver gesamt inkl. Prüfung |
+|---|---:|---:|---:|---:|---:|---:|
+| files-os-1 | 19,425 s | 3 / 3 | 12,439 s | 6,315 s | 4.747 ms | 6.669 ms |
+
+Die drei Produktzeiten betrugen in Ausführungsreihenfolge **1.184 ms**
+für die erste Liste, **811 ms** für die Umbenennung und **763 ms** für die
+zweite Liste. Sie umfassen jeweils Workspace-CLI und Broker. Der Gast
+beobachtete den korrekten Dateibestand **8,000 s** nach Beginn des ersten
+Gastaufrufs und **1,140 s** nach Beginn des auslösenden Compose. Bis zur
+abschließenden Modellantwort vergingen 20,810 s ab Auftragsübergabe.
+
+In diesem Paar verkürzte sich die Auftragszeit bis zum Urteil um **45,849 s
+(70,2 %)**. Sol kam mit zwei Compose-Aufrufen und der Abschlussprüfung aus.
+Die fünf eingesparten äußeren Aufrufe und der entfallene Bildtransport gingen
+mit einer kürzeren Gesamtdauer einher, obwohl die summierte Gast-CLI-Zeit
+von 2,509 auf 4,747 s stieg. Pro Zugangsart liegt ein Lauf vor. Modell, Tier,
+Testdaten, Prüfer und Einzelgastbetrieb stimmen überein. Driver v8 enthält
+die zusätzlich verfügbaren Produktaktionen, der Vergleichslauf im Dialog
+lief auf v7. Die Stichproben erlauben keine allgemeine Erfolgsquote oder
+isolierte Schätzung des Effekts einzelner Werkzeug- oder Driveränderungen.
