@@ -191,57 +191,62 @@ with subtest(
     semantic_args = {"window_id": target_id, "background": True}
     tree = actor("desktop_semantic_direct", **semantic_args)
     assert tree["background"] and tree["elements_complete"], tree
-    fields = [
-        e
-        for e in tree["elements"]
-        if e["capabilities"]["set_value"] and e["text_excerpt"] == "actorbefore"
-    ]
-    assert len(fields) == 1, tree
-    # Ordinary foreground input after handle acquisition challenges background routing.
+    # All edits target the same open GTK document. Later iterations reuse the
+    # verified window observation returned by the immediately preceding edit.
+    expected = "actorbefore"
     machine.send_chars("human", delay=0.15)
-    action = {
-        "kind": "semantic_set_value",
-        "handle_id": fields[0]["handle_id"],
-        "expected_text": "actorbefore",
-        "text": "actorafter",
-    }
-    started = time.perf_counter()
-    result = actor(
-        "desktop_act",
-        observation_id=tree["observation_id"],
-        window_id=target_id,
-        task_id="vm-background-edit",
-        actions=[action],
-        include_image=False,
-        observe_after=True,
-    )
-    assert result["background_semantic"] and result["completed_actions"] == 1, result
-    assert result["status"] == "dispatched" and result["actor_release_confirmed"], (
-        result
-    )
-    effect = result["effects"][0]["details"]
-    assert (
-        effect["route"] == "direct_atspi_object" and effect["exact_buffer_bytes_match"]
-    ), effect
-    elapsed = 1000 * (time.perf_counter() - started)
-    machine.log(f"Action through target readback, including driver shell transport: {elapsed:.1f} ms")
-    machine.log("Mousepad timings in ms: " + json.dumps({
-        "whole_driver_call": round(elapsed, 2),
-        "actor": result.get("timing_ms"),
-        "dispatch_ack": result["effects"][0].get("dispatch_ack_ms"),
-        "atspi_edit": effect.get("latency_ms"),
-        "fresh_tree": result["after_observation"].get("latency_ms"),
-    }))
-    assert effect["focus_events"] == "no_change_observed", effect
-    fresh = result["after_observation"]
-    assert fresh["niri_window_id"] == target_id, fresh
-    assert fresh["elements_complete"] and any(
-        e["editable"] and e["text_excerpt"] == "actorafter" for e in fresh["elements"]
-    ), fresh
+    for iteration, replacement in enumerate(("actorafter", "actoragain", "actorfinal", "actorafter")):
+        fields = [
+            e
+            for e in tree["elements"]
+            if e["capabilities"]["set_value"] and e["text_excerpt"] == expected
+        ]
+        assert len(fields) == 1, tree
+        action = {
+            "kind": "semantic_set_value",
+            "handle_id": fields[0]["handle_id"],
+            "expected_text": expected,
+            "text": replacement,
+        }
+        started = time.perf_counter()
+        result = actor(
+            "desktop_act",
+            observation_id=tree["observation_id"],
+            window_id=target_id,
+            task_id="vm-background-edit",
+            actions=[action],
+            include_image=False,
+            observe_after=True,
+        )
+        assert result["background_semantic"] and result["completed_actions"] == 1, result
+        assert result["status"] == "dispatched" and result["actor_release_confirmed"], (
+            result
+        )
+        effect = result["effects"][0]["details"]
+        assert (
+            effect["route"] == "direct_atspi_object" and effect["exact_buffer_bytes_match"]
+        ), effect
+        elapsed = 1000 * (time.perf_counter() - started)
+        machine.log(f"Action through target readback, including driver shell transport: {elapsed:.1f} ms")
+        machine.log("Mousepad timings in ms: " + json.dumps({
+            "iteration": iteration, "elements": len(tree["elements"]),
+            "whole_driver_call": round(elapsed, 2),
+            "actor": result.get("timing_ms"),
+            "dispatch_ack": result["effects"][0].get("dispatch_ack_ms"),
+            "atspi_edit": {key: effect.get(key) for key in (
+                "target_validation_ms", "helper_wall_ms", "connect_ms", "revalidation_ms", "latency_ms"
+            )},
+            "fresh_stages": result["after_observation"].get("timing_ms"),
+            "fresh_tree": result["after_observation"].get("latency_ms"),
+        }))
+        assert effect["focus_events"] == "no_change_observed", effect
+        fresh = result["after_observation"]
+        assert fresh["niri_window_id"] == target_id, fresh
+        assert fresh["elements_complete"] and any(
+            e["editable"] and e["text_excerpt"] == replacement for e in fresh["elements"]
+        ), fresh
+        tree = fresh
+        expected = replacement
     finish_draft("actor", "human")
-    machine.log(
-        f"Window {target_id}: {effect['route']} returned {effect['status']}; "
-        f"fresh AT-SPI readback matched actorafter while window {human_id} retained focus"
-    )
     machine.copy_from_machine(f"{home}/draft-actor.txt")
     machine.copy_from_machine(events_file)
