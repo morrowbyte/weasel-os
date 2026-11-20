@@ -13,6 +13,7 @@ from subprocess import DEVNULL, PIPE
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import exchange
+import private_clipboard
 from presentation import Presentation
 from actions import MAX_REQUEST, MAX_SECONDS, chord, identifier, validate_batch
 
@@ -138,6 +139,7 @@ class Broker:
     def __init__(self, exchange_fd=None):
         self.exchange_fd = exchange_fd
         self.exchange_worker = None
+        self.clipboard = private_clipboard.Clipboard()
         self.session = uuid.uuid4().hex
         self.closing = False
         self.active = None
@@ -150,9 +152,9 @@ class Broker:
     def gate():
         return json.loads((GATE / "state").read_bytes())
 
-    def admitted(self):
+    def admitted(self, epoch):
         gate = self.gate()
-        return not gate["paused"] and gate["epoch"] == self.epoch
+        return not gate["paused"] and gate["epoch"] == epoch
 
     def cancel_active(self):
         # Gate, disconnect, timeout and explicit cancel can race. Allow the
@@ -161,16 +163,29 @@ class Broker:
             self.active.cancel()
 
     async def watch_gate(self):
-        while self.admitted():
+        while self.admitted(self.epoch):
             await asyncio.sleep(0.05)
 
     async def batch(self, actions, progress, typing_mode):
         for index, action in enumerate(actions):
             try:
-                if not self.admitted():
+                epoch = self.epoch
+                if not self.admitted(epoch):
                     raise RuntimeError("input revoked")
                 progress["attempted"] = index + 1
-                progress["results"].append(await act(action, typing_mode))
+                if action[0] == "clipboard-read":
+                    result = await private_clipboard.read_text()
+                    if not self.admitted(epoch):
+                        raise RuntimeError("private clipboard admission expired")
+                elif action[0] == "clipboard-write":
+                    result = await self.clipboard.write(action[1], self.job_id,
+                                                        lambda: self.admitted(epoch))
+                else:
+                    result = await act(action, typing_mode)
+                progress["results"].append(result)
+            except asyncio.CancelledError:
+                await self.clipboard.close(job=self.job_id)
+                raise
             except Exception as exc:
                 raise RuntimeError(f"action {index + 1} ({action[0]}): {exc}") from exc
         return {"results": progress["results"]}
@@ -197,16 +212,20 @@ class Broker:
                     "manual_input": bool(self.view and self.view.manual)}
         if op == "gate":
             stopped = None
-            if self.active and self.epoch is not None and not self.admitted():
+            if self.active and self.epoch is not None and not self.admitted(self.epoch):
                 stopped = self.job_id
                 self.cancel_active()
                 await asyncio.gather(self.active, return_exceptions=True)
+            await self.clipboard.close(revoked_only=True)
             if self.view and not self.view.admitted(self):
                 await self.view.revoke()
             return {"interrupted": stopped}
         if op == "stop":
             self.closing = True
             self.cancel_active()
+            if self.active:
+                await asyncio.gather(self.active, return_exceptions=True)
+            await self.clipboard.close()
             if self.view:
                 await self.view.revoke()
             await self.close_exchange_worker()
@@ -237,6 +256,8 @@ class Broker:
                 self.epoch = gate["epoch"]
             work = self.exchange_operation(op, names, progress["timing_ns"])
         elif op == "batch":
+            if self.closing:
+                raise RuntimeError("workspace is stopping")
             if self.view and self.view.manual:
                 raise RuntimeError("workspace in manual use; unfocus or close its view")
             job = identifier(request["job"])
@@ -431,6 +452,7 @@ async def serve():
         for task in watchers:
             task.cancel()
     await broker.close_exchange_worker()
+    await broker.clipboard.close()
     drain.cancel()
     # Returning exits the namespace's main process. Bubblewrap's PID 1 then
     # exits, which tears down every remaining descendant, including daemonized apps.

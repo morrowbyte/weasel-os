@@ -55,6 +55,32 @@ Eine Sequenz validiert alle Aktionsnamen, Felder und Katalogtypen vor dem ersten
 
 `private_screenshot` gibt unter MCP einen PNG-Inhaltsblock zurück. Über die CLI stehen die Bilddaten in `images[0].data`. Die temporäre Bilddatei wird nach dem Lesen entfernt.
 
+### Private Zwischenablage
+
+`private_clipboard_write` setzt explizit bis zu 10 KiB UTF-8 auf der benannten
+privaten Arbeitsfläche. `private_clipboard_read` gibt den aktuellen Text mit
+MIME-Typ und Bytezahl zurück, einschließlich Leerzeichen und abschließender
+Zeilenumbrüche. Beide Aktionen können mit privaten Tasten in demselben
+`compose`-Auftrag laufen. Der Schreibbeleg bestätigt den Zwischenablageinhalt.
+Der Text im Zielfeld lässt sich danach durch erneutes Kopieren und Lesen prüfen.
+
+~~~sh
+weasel compose - <<'JSON'
+[
+  {"action":"private_key","args":{"name":"bericht","key":"Ctrl+a"}},
+  {"action":"private_key","args":{"name":"bericht","key":"Ctrl+c"}},
+  {"action":"private_clipboard_read","args":{"name":"bericht"}}
+]
+JSON
+~~~
+
+Für eine Einfügung `private_clipboard_write` mit `name` und `text` vor
+`private_key` mit `Ctrl+v` verwenden. In CLI- und MCP-Ergebnissen steht der
+exakte Text unter `steps[i].result.results[0].text`. Die Palette meldet nur
+die Bytezahl und bietet beim Schreiben eine maskierte einzeilige Eingabe.
+Die Zwischenablage gehört zum privaten Wayland-Seat. Das Ergebnis einer
+expliziten CLI- oder MCP-Leseaktion geht an den jeweiligen Aufrufer.
+
 ## Codex CLI, Crew und ChatGPT Desktop
 
 Den absoluten Pfad des installierten Pakets verwenden. Bei Installation im Systemprofil:

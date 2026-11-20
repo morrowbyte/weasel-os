@@ -19,7 +19,8 @@ from desktop import ActionError, Desktop, PIPE
 sys.path.append(str(Path(__file__).resolve().parents[1] / "agent-workspace"))
 from workspace_client import BrokerError, exchange_request
 
-PRIVATE_INPUTS = {"private_text", "private_key", "private_click", "private_scroll", "private_move", "private_drag"}
+PRIVATE_INPUTS = {"private_text", "private_key", "private_click", "private_scroll", "private_move", "private_drag",
+                  "private_clipboard_read", "private_clipboard_write"}
 
 async def workspace(name, *args, payload=None):
     process = await asyncio.create_subprocess_exec(
@@ -163,7 +164,8 @@ def input_batch(actions, start, single):
         if action not in PRIVATE_INPUTS or args["name"] != name:
             break
         # plan() has validated and ordered arguments using the catalog.
-        operation = [action.removeprefix("private_"), *(v for k, v in args.items() if k != "name")]
+        operation = [action.removeprefix("private_").replace("_", "-"),
+                     *(v for k, v in args.items() if k != "name")]
         size += len(json.dumps(operation, ensure_ascii=False).encode()) + (2 if payload else 0)
         # The CLI wraps this array with its op, 32-byte epoch and job ID.
         if size > 63 * 1024:
@@ -200,12 +202,12 @@ async def dispatch_inputs(name, payload):
         results, attempted = [], len(payload)
         error = error or "Ungültige Eingabequittung des Brokers"
 
-    records = [{"action": "private_" + result["action"], "job": job, "ok": True,
+    records = [{"action": "private_" + result["action"].replace("-", "_"), "job": job, "ok": True,
                 "result": {"ok": True, "results": [result]}} for result in results]
     if error is not None:
         first = len(results)
         for index in range(first, max(first + 1, attempted)):
-            record = {"action": "private_" + payload[index][0], "job": job, "ok": False,
+            record = {"action": "private_" + payload[index][0].replace("-", "_"), "job": job, "ok": False,
                       "effect": "unknown" if index < attempted else "not_started", "error": error}
             if index == first:
                 record["receipt"] = reply

@@ -97,6 +97,8 @@ zurückgewiesen.
 | `view` | Öffnet eine interaktive Ansicht der laufenden Sitzung bis zum Schließen des Fensters. |
 | `wait-window APP_ID` | Wartet höchstens 30 Sekunden auf passenden Fokus. |
 | `screenshot DATEI.png` | Schreibt das vollständige private Bild als neue Datei auf dem Host. |
+| `clipboard-read` | Liest explizit bis zu 10 KiB UTF-8 aus der privaten Zwischenablage. |
+| `clipboard-write` | Setzt explizit bis zu 10 KiB UTF-8 aus stdin in der privaten Zwischenablage. |
 | `key Ctrl+Shift+s`, `text TEXT` | Sendet einen XKB-Tastennamen mit optionalen Modifikatoren bzw. Unicode-Text an das fokussierte private Fenster. |
 | `click X Y [left\|middle\|right]` | Klickt in absoluten Pixelkoordinaten, standardmäßig links. |
 | `move X Y` | Bewegt den privaten Zeiger zur angegebenen Position. |
@@ -133,7 +135,8 @@ printf '%s\n' '[["open","foot"],["wait-window","foot"],["text","Hallo"]]' |
 ```
 
 Ein Batch akzeptiert die Aktionsnamen `open`, `wait-window`, `text`, `key`,
-`click` und `scroll` mit den oben gezeigten Argumenten. Alle Aktionen werden
+`click`, `scroll`, `clipboard-read` und `clipboard-write`. Im Batch nimmt
+`clipboard-write` den Text als einzelnes Argument an. Alle Aktionen werden
 vor der ersten Ausführung geprüft. Maximal 64 Aktionen, 64 KiB Anfrage und
 30 Sekunden Gesamtlaufzeit. Pro Desktop läuft höchstens eine Aktionsfolge.
 Konkurrierende Eingaben melden „busy“. Eine verlorene Client-Verbindung

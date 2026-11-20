@@ -4,6 +4,7 @@ import re
 from functools import cache
 from pathlib import Path, PurePosixPath
 
+from private_clipboard import encode_text
 from workspace_client import identifier
 
 MODIFIERS = {"ctrl", "shift", "alt", "logo", "altgr"}
@@ -54,6 +55,11 @@ def validate(action):
     if any(type(arg) not in (str, int) or "\0" in str(arg) for arg in action):
         raise ValueError("arguments must be strings or integers without NUL")
     name, *args = action
+    if name == "clipboard-read" and not args:
+        return action
+    if name == "clipboard-write" and len(args) == 1:
+        encode_text(args[0])
+        return action
     if name == "open" and 1 <= len(args) <= 128 and all(isinstance(a, str) for a in args):
         path = PurePosixPath(args[0])
         if path.is_relative_to("/nix/store") and ".." not in path.parts:

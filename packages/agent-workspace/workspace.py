@@ -17,6 +17,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from actions import MAX_REPLY, MAX_REQUEST, MAX_SECONDS, identifier, validate_batch
+from private_clipboard import MAX_TEXT_BYTES
 from exchange import OPERATIONS
 from presentation import open_window
 from sandbox import exchange_dir, profile_dir, spawn
@@ -222,9 +223,19 @@ def execute(args):
         if len(raw) > MAX_REQUEST:
             raise ValueError("batch exceeds 64 KiB")
         actions = json.loads(raw)
+    elif op == "clipboard-write":
+        job = uuid.uuid4().hex
+        data = sys.stdin.buffer.read(MAX_TEXT_BYTES + 1)
+        if len(data) > MAX_TEXT_BYTES:
+            raise ValueError("clipboard text exceeds 10 KiB")
+        try:
+            text = data.decode("utf-8")
+        except UnicodeError as exc:
+            raise ValueError("clipboard requires valid UTF-8 text") from exc
+        actions = [[op, text]]
     else:
         job = uuid.uuid4().hex
-        values = args.values
+        values = getattr(args, "values", [])
         if values[:1] == ["--"]:
             values = values[1:]
         actions = [[op, *values]]
@@ -260,6 +271,8 @@ def main():
         for field in fields:
             command.add_argument(field)
     commands.add_parser("screenshot").add_argument("file")
+    commands.add_parser("clipboard-read", help="read the private seat's current UTF-8 text selection")
+    commands.add_parser("clipboard-write", help="set the private seat's UTF-8 text from stdin")
     for name, description in (("open", "-- PROGRAM [ARG ...]"), ("key", "CHORD"), ("text", "TEXT"),
                               ("wait-window", "APP_ID"), ("click", "X Y [BUTTON]"),
                               ("move", "X Y"), ("drag", "START_X START_Y END_X END_Y [BUTTON]"),

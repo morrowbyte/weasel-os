@@ -101,6 +101,55 @@ class PrivateTransport(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(server.wait_closed)
         self.addCleanup(server.close)
 
+    async def test_clipboard_roundtrip_keeps_one_job_and_exact_result(self):
+        text = "Friday.\nGrüße 👋\r\n"
+        copy = {"action": "private_clipboard_write", "args": {"text": text}}
+        read = {"action": "private_clipboard_read"}
+        readback = {"action": "clipboard-read", "mime": "UTF8_STRING", "bytes": len(text.encode()), "text": text}
+        receipt = {"action": "clipboard-write", "bytes": len(text.encode())}
+        with patch.object(self.broker.clipboard, "write", return_value=receipt) as write, \
+             patch.object(broker.private_clipboard, "read_text", return_value=readback) as paste, \
+             patch.object(broker, "act", return_value={"action": "key"}) as actor:
+            result, _ = await compose.execute([copy, key("Ctrl+v"), key("Ctrl+a"), key("Ctrl+c"), read])
+            self.assertEqual(result["status"], "completed")
+            job = result["steps"][0]["job"]
+            self.assertEqual({s["job"] for s in result["steps"]}, {job})
+            self.assertEqual(write.await_args.args[:2], (text, job))
+            self.assertEqual([c.args[0] for c in actor.await_args_list],
+                             [["key", "ctrl+v"], ["key", "ctrl+a"], ["key", "ctrl+c"]])
+            self.assertEqual(result["steps"][0]["result"]["results"], [receipt])
+            self.assertEqual(result["steps"][-1]["result"]["results"], [readback])
+
+            self.broker.view = Mock(manual=True)
+            denied, _ = await compose.execute([read])
+            self.assertIn("manual use", denied["steps"][0]["error"])
+            self.broker.view = None
+            self.broker.gate()["paused"] = True
+            denied, _ = await compose.execute([read])
+            self.assertEqual(denied["steps"][0]["effect"], "not_started")
+            paste.assert_awaited_once()
+            with self.assertRaisesRegex(ValueError, "10 KiB"):
+                await compose.execute([read, {**copy, "args": {"text": "👋" * 2561}}])
+
+    async def test_cancel_releases_only_the_clipboard_source_for_that_job(self):
+        entered = asyncio.Event()
+
+        async def key_pending(*_):
+            entered.set()
+            await asyncio.Future()
+
+        write = {"action": "private_clipboard_write", "args": {"text": "Friday."}}
+        with patch.object(self.broker.clipboard, "write", return_value={"action": "clipboard-write"}), \
+             patch.object(self.broker.clipboard, "close") as close, \
+             patch.object(broker, "act", side_effect=key_pending):
+            task = asyncio.create_task(compose.execute([write, key("Ctrl+v")]))
+            await asyncio.wait_for(entered.wait(), 5)
+            job = self.broker.job_id
+            await compose.workspace("default", "cancel", job)
+            result, _ = await asyncio.wait_for(task, 5)
+            self.assertEqual(result["status"], "partial")
+            close.assert_awaited_once_with(job=job)
+
     async def test_mixed_batch_focus_failure_and_consumed_ids(self):
         steps = [key("Home"), {"action": "private_click", "args": {"x": 7, "y": 12, "button": "left"}},
                  {"action": "private_scroll", "args": {"x": 8, "y": 13, "direction": "down", "steps": 2}},

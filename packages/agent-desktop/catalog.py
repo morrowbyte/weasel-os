@@ -25,6 +25,8 @@ FILENAME = string(255, pattern=r"^(?!\.)[^/\x00-\x1f\x7f]+$",
 X, Y = integer(0, 1279), integer(0, 719)
 ARGV = {"type": "array", "items": {**string(32768), "minLength": 0},
         "maxItems": 127, "default": []}
+# Keep in sync with agent-workspace/private_clipboard.py, which enforces the wire limit.
+MAX_CLIPBOARD_BYTES = 10 * 1024
 
 def action(title, category, focus, **fields):
     return {"title": title, "class": category, "focus": focus,
@@ -71,6 +73,10 @@ CATALOG = {
                             argv={**ARGV, "description": 'Ein Argument pro Listeneintrag, z. B. ["--option", "zwei Worte"].'},
                             wait_window=string(255, description="Exakte Wayland-App-ID oder X11-Klasse (WM_CLASS) eines neuen fokussierten Fensters.")),
     "private_text": private("Text ins private Fenster schreiben", text=string(8192)),
+    "private_clipboard_read": private("Private Zwischenablage lesen", read_only=True),
+    "private_clipboard_write": private("Text in private Zwischenablage legen",
+                                       text=string(MAX_CLIPBOARD_BYTES, minLength=0,
+                                                   description="Exakter UTF-8-Text, bis zu 10 KiB.")),
     "private_key": private("Taste im privaten Fenster senden", key=string(64)),
     "private_click": private("Privat klicken", x=X, y=Y, button=choice("left", "middle", "right")),
     "private_move": private("Privaten Zeiger bewegen", x=X, y=Y),
@@ -139,6 +145,8 @@ def validate(action_id, args):
             raise ValueError("private_open: Workspace-Auftrag überschreitet 64 KiB")
     if action_id == "private_text" and len(result["text"].encode()) > 8192:
         raise ValueError("private_text: höchstens 8192 UTF-8-Bytes")
+    if action_id == "private_clipboard_write" and len(result["text"].encode()) > MAX_CLIPBOARD_BYTES:
+        raise ValueError("private_clipboard_write: höchstens 10 KiB UTF-8")
     if action_id == "private_key":
         *mods, key = result["key"].split("+")
         mods = [mod.lower() for mod in mods]

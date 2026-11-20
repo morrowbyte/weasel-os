@@ -45,7 +45,7 @@ async def probe(binary, command, args, source):
             listing = await call(3, "mcpServerStatus/list", {"threadId": thread_id, "limit": 100})
             servers = {s["name"]: s["tools"] for s in listing["data"]}
             required = {"catalog", "compose", "private_open", "private_text", "private_cancel_all",
-                        "private_resume", "window_focus"}
+                        "private_clipboard_read", "private_clipboard_write", "private_resume", "window_focus"}
             if not required <= servers["weasel_os"].keys():
                 raise ValueError("Desktop action inventory incomplete")
             if actor and not {"desktop_act", "desktop_cancel"} <= servers["weasel_desktop"].keys():

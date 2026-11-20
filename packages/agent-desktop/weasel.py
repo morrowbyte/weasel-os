@@ -49,14 +49,27 @@ PRIVATE_GATE_HELP = {
 def printable(value):
     return "".join(ch if ch.isprintable() else " " for ch in str(value))
 
-async def prompt(label, rows=None):
+async def prompt(label, rows=None, *, clipboard_input=False):
     options = ["--dmenu", "--prompt", label + " › ", "--width", "70"]
     if rows is not None:
         if not rows:
             raise ValueError("Keine Ziele vorhanden")
         options.append("--index")
-    process = await asyncio.create_subprocess_exec("fuzzel", *options,
-        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
+    config = None
+    try:
+        if clipboard_input:
+            # The clipboard action accepts typed text. Disable the host's two
+            # paste bindings even if the user's launcher config enables them.
+            config = os.memfd_create("fuzzel-private-clipboard")
+            os.write(config, b"[key-bindings]\npaste=none\npaste-primary=none\n")
+            os.lseek(config, 0, os.SEEK_SET)
+            options.extend(("--config", f"/proc/self/fd/{config}", "--password"))
+        process = await asyncio.create_subprocess_exec("fuzzel", *options,
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            pass_fds=() if config is None else (config,))
+    finally:
+        if config is not None:
+            os.close(config)
     data = "" if rows is None else "\n".join(printable(v) for v in rows) + "\n"
     output, _ = await process.communicate(data.encode())
     if process.returncode == 2:
@@ -96,7 +109,7 @@ async def pick_id(key):
 def action_label(spec):
     return f"{spec['title']}  ·  {FOCUS_LABELS[spec['focus']]}"
 
-async def pick_args(spec):
+async def pick_args(spec, *, clipboard_input=False):
     args = {}
     for key, field in spec["inputSchema"]["properties"].items():
         if key in ("if_sha256", "session"):
@@ -114,7 +127,7 @@ async def pick_args(spec):
         else:
             if field.get("default"):
                 label = f"{label} [{field['default']}]"
-            value = await prompt(label)
+            value = await prompt(label, clipboard_input=True) if clipboard_input and key == "text" else await prompt(label)
             if value or "default" not in field:
                 match field["type"]:
                     case "integer":
@@ -158,7 +171,7 @@ async def palette():
             await show_action_help(entries[await prompt("Hilfe", labels)])
             return
         action = entries[index]
-        args = await pick_args(CATALOG[action])
+        args = await pick_args(CATALOG[action], clipboard_input=action == "private_clipboard_write")
         result, images = await execute([{"action": action, "args": args}])
         row = result["steps"][0]
         if not row["ok"]:
@@ -166,6 +179,10 @@ async def palette():
         elif images:
             viewer = await asyncio.create_subprocess_exec("imv", "-", stdin=asyncio.subprocess.PIPE)
             await viewer.communicate(base64.b64decode(images[0]["data"]))
+        elif action in ("private_clipboard_read", "private_clipboard_write"):
+            receipt = row["result"]["results"][0]
+            label = "Private Zwischenablage gelesen" if action.endswith("_read") else "Private Zwischenablage gesetzt"
+            await show(label, [f"{receipt['bytes']} UTF-8-Bytes"])
         elif action == "private_exchange_list":
             listing = row["result"]
             rows = listing["entries"] or ["Keine sichtbaren Dateinamen"]
