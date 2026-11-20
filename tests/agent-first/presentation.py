@@ -19,6 +19,9 @@ with subtest("Manually edit the same private window, then continue behind a Niri
     machine.wait_until_succeeds(operator(view_cmd("status") +
         """ | jq -e '.windows[] | select(.focused and (.title | contains("presentation.txt")))'"""))
     identity = private_window()
+    host_display = ('export WAYLAND_DISPLAY=$(systemctl --user show-environment | '
+                    'sed -n "s/^WAYLAND_DISPLAY=//p"); ')
+    machine.succeed(operator(host_display + "printf foreground-clipboard | wl-copy"))
     machine.succeed(operator("niri msg action spawn -- " + view_cmd("view")))
     viewer_id = int(machine.wait_until_succeeds(operator(
         """niri msg --json windows | jq -er '.[] | select(.is_focused and
@@ -26,9 +29,13 @@ with subtest("Manually edit the same private window, then continue behind a Niri
     conflict_code, conflict = machine.execute(operator(view_cmd("text", "collision")))
     assert conflict_code != 0 and "manual use" in conflict, conflict
     machine.send_chars("manual")
+    machine.send_key("ctrl-a")
+    machine.send_key("ctrl-c")
+    machine.send_key("ctrl-end")
     machine.send_key("ctrl-s")
     machine.wait_until_succeeds(f"test \"$(cat {private_file})\" = manual")
 
+    machine.screenshot("private-presentation-manual")
     # The viewer stays mapped while the real guest keyboard types in a second
     # window and the broker edits the original editor through its private seat.
     foreground_file = home + "/presentation-foreground.txt"
@@ -40,6 +47,10 @@ with subtest("Manually edit the same private window, then continue behind a Niri
         .app_id == "presentation-draft") | .id'""")))
     machine.wait_until_succeeds(operator(view_cmd("status") +
         " | jq -e '.view_open and (.manual_input | not)'"))
+    machine.succeed(operator(view_cmd("open", "--", "sh", "-c",
+        "wl-paste --no-newline > /exchange/copied.txt")))
+    machine.wait_until_succeeds(f"test \"$(cat {root}/copied.txt)\" = manual")
+    assert machine.succeed(operator(host_display + "wl-paste --no-newline")) == "foreground-clipboard"
     machine.send_chars("fore")
     machine.succeed(operator(view_cmd("text", "agent")))
     machine.succeed(operator(view_cmd("key", "Ctrl+s")))
@@ -58,6 +69,12 @@ with subtest("Manually edit the same private window, then continue behind a Niri
         f".[] | select(.id == {foreground_id} and .is_focused)")))
     machine.log(f"Private Sway window {identity['id']} ({identity['app_id']}), Niri viewer "
                 f"{viewer_id}, foreground {foreground_id}: manualagentclosed / foreground")
+    machine.succeed(operator("niri msg action spawn -- " + view_cmd("view")))
+    machine.wait_until_succeeds(operator(view_cmd("status") + " | jq -e '.manual_input'"))
+    machine.succeed(operator(view_cmd("cancel-all")))
+    machine.wait_until_succeeds(operator(view_cmd("status") + " | jq -e '.paused and (.view_open | not)'"))
+    assert private_window()["id"] == identity["id"]
+    machine.succeed(operator(view_cmd("resume")))
     machine.copy_from_machine(private_file)
     machine.copy_from_machine(foreground_file)
     machine.succeed(operator(view_cmd("stop")))
