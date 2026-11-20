@@ -124,6 +124,11 @@ def main():
     assert os.path.samefile(
         Path("/proc", str(pid), "exe"), package / "lib/t3code-morrowbyte/t3code"
     ), "runtime record does not belong to the shipped Crew backend"
+    provider = json.loads((record.parent / "settings.json").read_text())[
+        "providerInstances"
+    ]["codex"]["config"]
+    assert provider["setupMode"] == "existing"
+    assert provider["binaryPath"] == "/run/current-system/sw/bin/crew-codex"
     # Crew installs this shim into its own base directory even when the PATH
     # integration is disabled. It talks to the live server as the guest owner.
     cli = base / "bin/t3"
@@ -162,6 +167,26 @@ def main():
         result.get("error"),
     )
     assert result["reply"] == "No goal is set.", result["reply"]
+    # Each adapter owns its app-server. The CLI and ChatGPT probes run
+    # separate binaries outside the Crew server's process tree.
+    processes = subprocess.check_output(["ps", "-eo", "pid=,ppid="], text=True)
+    parents = dict(tuple(map(int, line.split())) for line in processes.splitlines())
+    provider_pids = []
+    for child in parents:
+        ancestor = child
+        while ancestor in parents and ancestor != pid:
+            ancestor = parents[ancestor]
+        if ancestor != pid:
+            continue
+        proc = Path("/proc", str(child))
+        try:
+            if (proc / "exe").samefile(provider["binaryPath"]) and b"app-server" in (
+                proc / "cmdline"
+            ).read_bytes().split(b"\0"):
+                provider_pids.append(child)
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+    assert provider_pids, "Crew has no running app-server from its packaged Codex"
     # Crew batches log writes; inspect the same completed run during the flush.
     deadline = time.monotonic() + 15
     while True:
@@ -174,7 +199,15 @@ def main():
             if time.monotonic() >= deadline:
                 raise
             time.sleep(0.25)
-    print(json.dumps(receipt))
+    print(
+        json.dumps(
+            {
+                **receipt,
+                "packagedProvider": provider["binaryPath"],
+                "appServerPids": provider_pids,
+            }
+        )
+    )
 
 
 if __name__ == "__main__":

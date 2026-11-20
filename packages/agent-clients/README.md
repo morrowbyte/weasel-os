@@ -22,6 +22,8 @@ Im Hostmodul unter `hosts/<name>/` wird das Profil so eingebunden.
 
 Der Systembau bezieht die Programme aus öffentlichen Quellen. Die Clients richten beim Start im Benutzerkonto ihre eigenen Profile ein und führen die Anmeldung über ihre jeweilige Oberfläche durch. Das Profil enthält keine Benutzerdaten. Das Hostmodul verwaltet die gemeinsame Codex-Konfiguration.
 
+Beim ersten Desktopstart in einem leeren Crew-Profil verwendet der lokale Codex-Provider `/run/current-system/sw/bin/crew-codex`. Das Agent-Profil liefert dafür die von Crew .131 für Linux x64 gepinnte Distribution **0.163.0-morrowbyte.2** mit Code-Mode-Host und Ripgrep. Der Pfad folgt dem aktiven NixOS-System. Bereits eingerichtete Profile behalten ihre Einstellungen und ihre verwalteten Installationen. Die separate Codex CLI im Anwendungsmenü verwendet weiterhin das Paket aus nixpkgs. [Runtime-Release](https://github.com/morrowbyte/t3code/releases/tag/codex-runtime-0.163.0-morrowbyte.2) · [Versionsprüfung in Crew .131](https://github.com/morrowbyte/t3code/blob/f3dff0bb10d4661d9da9a69c616c90e330693bc8/apps/server/src/provider/model-manifest.json)
+
 ## Crew aktualisieren
 
 Bei einem neuen Morrowbyte-Release Version und SHA-256 in [crew.nix](./crew.nix) aktualisieren. Für den obigen Pin stimmen der Digest des GitHub-Assets und der AppImage-Eintrag in den [Release-Prüfsummen](https://github.com/morrowbyte/t3code/releases/download/v0.1.11-nightly.20261118.131/SHA256SUMS) überein. Nix prüft beim Abruf die Bytes gegen den Pin.

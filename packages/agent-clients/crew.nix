@@ -5,6 +5,8 @@
   appimageTools,
   autoPatchelfHook,
   makeWrapper,
+  callPackage,
+  python3,
   wrapGAppsHook3,
   makeDesktopItem,
   alsa-lib,
@@ -43,6 +45,7 @@
 }:
 let
   pname = "t3code-morrowbyte";
+  crewCodex = callPackage ./crew-codex.nix { };
   version = "0.1.11-nightly.20261118.131";
   src = fetchurl {
     url = "https://github.com/morrowbyte/t3code/releases/download/v${version}/T3-Code-${version}-x86_64.AppImage";
@@ -124,12 +127,33 @@ stdenv.mkDerivation {
     test -x "$out/lib/${pname}/t3code"
     makeShellWrapper "$out/lib/${pname}/t3code" "$out/bin/${pname}" \
       "''${gappsWrapperArgs[@]}" \
+      --run '${python3}/bin/python3 -I ${./initialize-crew.py} || exit $?' \
       --prefix PATH : ${lib.makeBinPath [ xdg-utils ]} \
       --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath runtimeLibraries} \
       --unset NO_AT_BRIDGE \
       --add-flags "--force-renderer-accessibility" \
       --set T3CODE_DISABLE_AUTO_UPDATE true \
       --set T3CODE_DESKTOP_LINUX_URL_HANDLER_LAUNCHER /run/current-system/sw/bin/${pname}
+    ln -s ${crewCodex}/bin/crew-codex "$out/bin/crew-codex"
+  '';
+  doInstallCheck = true;
+  installCheckPhase = ''
+    runHook preInstallCheck
+    export T3CODE_HOME="$TMPDIR/crew-profile"
+    seed() {
+      ${python3}/bin/python3 -I ${./initialize-crew.py}
+    }
+    seed
+    test -s "$T3CODE_HOME/userdata/settings.json"
+    printf '%s\n' '{"providerInstances":{"codex":{"driver":"codex","enabled":false,"config":{}}}}' > "$TMPDIR/user-choice.json"
+    cp "$TMPDIR/user-choice.json" "$T3CODE_HOME/userdata/settings.json"
+    seed
+    cmp "$TMPDIR/user-choice.json" "$T3CODE_HOME/userdata/settings.json"
+    export T3CODE_HOME="$TMPDIR/existing-crew-profile"
+    mkdir -p "$T3CODE_HOME/runtime"
+    seed
+    test ! -e "$T3CODE_HOME/userdata/settings.json"
+    runHook postInstallCheck
   '';
   meta = {
     description = "Crew desktop client by Morrowbyte";
