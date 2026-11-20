@@ -177,9 +177,12 @@ with tempfile.TemporaryDirectory(prefix="codex-backend-") as directory:
             observed = {str(w["id"]): w["app_id"] for w in step["result"]}
             expected = json.loads(expected_json)
             assert expected.items() <= observed.items(), (expected, observed)
+            skills = rpc(5, "skills/list", {"cwds": [directory]})
+            assert any(skill["name"] == "weasel-desktop" and skill.get("enabled", True)
+                       for entry in skills["data"] for skill in entry["skills"]), skills
             print(json.dumps({"backend": binary, "userAgent": hello["userAgent"],
                               "readOnlyTool": "weasel_os.windows", "matchedWindows": expected,
-                              "modelTurns": 0}))
+                              "systemSkill": "weasel-desktop", "modelTurns": 0}))
         finally:
             server.stdin.close()
             try:

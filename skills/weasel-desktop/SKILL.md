@@ -13,4 +13,6 @@ Compose independent or stable actions using `weasel compose --request-id ID`. In
 
 For a second look at a private workspace, pass the previous screenshot's `sha256` as `if_sha256`. The tool samples the live output each time. A matching hash returns `unchanged` immediately after capture and saves transferring the same image again.
 
+For a file task in an explicitly shared workspace directory, use `private_exchange_list` to identify the files. Compose `private_exchange_rename_noreplace` with `private_exchange_lstat` to rename and verify the destination in one call. An existing destination stops the rename. Use the graphical file chooser when the task calls for interacting with that particular UI.
+
 Foreground control uses the installed `weasel_desktop` actor. After login or an explicit takeover the desktop owner can press Super+Shift+A to allow new desktop actions. Respect the current stop and session. Obtain fresh observations, bind physical actions to their task and use the packaged indicator. Supply an explicit target and verify changed application state. Keep personal credentials in their existing stores.
