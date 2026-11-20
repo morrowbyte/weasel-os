@@ -1,4 +1,5 @@
 """One closed catalog for interactive prompts, CLI validation and MCP schemas."""
+import json
 import re
 
 def integer(low, high):
@@ -18,6 +19,8 @@ def obj(fields, required=None):
 ID = integer(1, 2**63 - 1)
 NAME = string(32, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$", default="default")
 X, Y = integer(0, 1279), integer(0, 719)
+ARGV = {"type": "array", "items": {**string(32768), "minLength": 0},
+        "maxItems": 127, "default": []}
 
 def action(title, category, focus, **fields):
     return {"title": title, "class": category, "focus": focus,
@@ -44,15 +47,27 @@ CATALOG = {
                               "foreground", "changes-focus", workspace_id=ID),
     "app_launch": action("App in einem neuen privaten Profil starten", "foreground",
                          "may-change-focus", app=choice("zed", "chrome")),
-    "private_start": private("Private Arbeitsfläche starten"),
+    "private_start": private("Private Arbeitsfläche starten",
+                             exchange={**string(4096), "minLength": 0, "default": "",
+                                       "description": "Optionaler Host-Ordner, privat eingebunden unter /exchange."},
+                             network={"type": "boolean", "default": False,
+                                      "description": "Ausgehenden Netzwerkzugang für die Sitzung zulassen."}),
     "private_status": private("Private Arbeitsfläche prüfen", read_only=True),
     "private_editor": private("Texteditor auf der privaten Arbeitsfläche öffnen"),
+    "private_open": private("Programm auf privater Arbeitsfläche öffnen",
+                            program=string(4096, description="Befehl im PATH oder Pfad zu einem Nix-Store-Programm."),
+                            argv={**ARGV, "description": 'Ein Argument pro Listeneintrag, z. B. ["--option", "zwei Worte"].'},
+                            wait_window=string(255, description="Exakte Wayland-App-ID eines neuen fokussierten Fensters.")),
     "private_text": private("Text ins private Fenster schreiben", text=string(8192)),
     "private_key": private("Taste im privaten Fenster senden", key=string(64)),
     "private_click": private("Privat klicken", x=X, y=Y, button=choice("left", "middle", "right")),
     "private_scroll": private("Privat scrollen", x=X, y=Y,
                               direction=choice("up", "down", "left", "right"), steps=integer(1, 32)),
     "private_screenshot": private("Private Arbeitsfläche aufnehmen", read_only=True),
+    "private_cancel_all": action("Private Eingaben abbrechen und sperren", "private-workspace",
+                                 "private-only"),
+    "private_resume": action("Private Eingaben für neue Aufträge freigeben", "private-workspace",
+                             "private-only"),
     "private_stop": private("Private Sitzung samt ihren Apps beenden"),
 }
 STEP = obj({"action": choice(*CATALOG), "args": {"type": "object"}}, ["action"])
@@ -64,6 +79,23 @@ def catalog():
     return {"version": 1, "actions": CATALOG, "composition": COMPOSE,
             "full_desktop": ["weasel-computer-use", "mcp"]}
 
+def valid_value(value, spec):
+    if "enum" in spec:
+        return value in spec["enum"]
+    match spec["type"]:
+        case "integer":
+            return type(value) is int and spec["minimum"] <= value <= spec["maximum"]
+        case "boolean":
+            return type(value) is bool
+        case "array":
+            return (isinstance(value, list) and len(value) <= spec["maxItems"]
+                    and all(valid_value(item, spec["items"]) for item in value))
+        case "string":
+            return (isinstance(value, str) and not re.search(r"[\0\ud800-\udfff]", value)
+                    and spec["minLength"] <= len(value) <= spec["maxLength"]
+                    and ("pattern" not in spec or re.fullmatch(spec["pattern"], value)))
+    return False
+
 def validate(action_id, args):
     if not isinstance(action_id, str) or action_id not in CATALOG:
         raise ValueError("Unbekannte Aktion")
@@ -73,17 +105,15 @@ def validate(action_id, args):
     result = {}
     for key, spec in schema["properties"].items():
         value = args.get(key, spec.get("default"))
-        if "enum" in spec:
-            valid = value in spec["enum"]
-        elif spec["type"] == "integer":
-            valid = type(value) is int and spec["minimum"] <= value <= spec["maximum"]
-        else:
-            valid = (isinstance(value, str) and "\0" not in value
-                     and spec["minLength"] <= len(value) <= spec["maxLength"]
-                     and ("pattern" not in spec or re.fullmatch(spec["pattern"], value)))
-        if not valid:
+        if not valid_value(value, spec):
             raise ValueError(f"{action_id}: ungültiges oder fehlendes Argument {key}")
         result[key] = value
+    if action_id == "private_open":
+        if len(result["wait_window"].encode()) > 255:
+            raise ValueError("private_open: Wayland-App-ID höchstens 255 UTF-8-Bytes")
+        batch = [["open", result["program"], *result["argv"]], ["wait-window", result["wait_window"]]]
+        if len(json.dumps(batch)) > 64 << 10:
+            raise ValueError("private_open: Workspace-Auftrag überschreitet 64 KiB")
     if action_id == "private_text" and len(result["text"].encode()) > 8192:
         raise ValueError("private_text: höchstens 8192 UTF-8-Bytes")
     if action_id == "private_key":

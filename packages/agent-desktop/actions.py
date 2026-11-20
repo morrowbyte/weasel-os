@@ -35,11 +35,60 @@ async def workspace(name, *args, payload=None):
                           or f"Workspace lieferte keinen Beleg (Exit {process.returncode})", result)
     return result
 
+async def open_private(name, args):
+    app_id = args["wait_window"]
+    before = await workspace(name, "status")
+    if not before["running"]:
+        raise ActionError("Private Arbeitsfläche zuerst starten", before)
+    windows = before["windows"]
+    if any(window["app_id"] == app_id for window in windows):
+        raise ActionError("Diese Wayland-App-ID ist schon geöffnet. "
+                          "Eine eigene App-ID oder eine andere private Sitzung verwenden.", before)
+
+    job = uuid.uuid4().hex
+    batch = [["open", args["program"], *args["argv"]], ["wait-window", app_id]]
+    try:
+        receipt = await workspace(name, "batch", job, payload=batch)
+    except (ActionError, OSError, asyncio.CancelledError) as exc:
+        raise ActionError(f"Privater App-Start unbestätigt. Das Programm kann bereits laufen. {exc}",
+                          {"job": job, "broker": getattr(exc, "receipt", None)}) from exc
+
+    match receipt.get("results"):
+        case [dict() as spawn, dict() as window] if (
+            type(spawn.get("pid")) is int and spawn["pid"] > 0
+            and type(window.get("id")) is int and window["id"] > 0
+            and window.get("app_id") == app_id and window.get("focused") is True
+            and all(previous["id"] != window["id"] for previous in windows)
+        ):
+            return {"job": job, "spawn": spawn, "window": window}
+    raise ActionError("Neues fokussiertes Fenster unbestätigt", {"job": job, "broker": receipt})
+
 async def private(action, args, images):
-    name = args["name"]
     operation = action.removeprefix("private_")
-    if operation in ("start", "stop", "status"):
+    # The workspace CLI owns the one shared gate, regardless of workspace name.
+    if operation == "cancel_all":
+        try:
+            return await workspace("default", "cancel-all")
+        except ActionError as exc:
+            if exc.receipt and exc.receipt.get("paused") is True:
+                failed = [item["name"] for item in exc.receipt["workspaces"] if "error" in item]
+                raise ActionError("Private Eingaben gesperrt. Abbruch unbestätigt für: "
+                                  + ", ".join(failed), exc.receipt) from exc
+            raise
+    if operation == "resume":
+        return await workspace("default", "resume")
+    name = args["name"]
+    if operation == "start":
+        options = []
+        if args["exchange"]:
+            options.append("--exchange=" + args["exchange"])
+        if args["network"]:
+            options.append("--network")
+        return await workspace(name, "start", *options)
+    if operation in ("stop", "status"):
         return await workspace(name, operation)
+    if operation == "open":
+        return await open_private(name, args)
     if operation == "screenshot":
         # The CLI receives image bytes in its JSON. MCP presents them as an
         # image content block. Both paths clean up the temporary file.

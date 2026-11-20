@@ -10,6 +10,31 @@ from actions import execute
 from catalog import CATALOG, catalog
 from server import serve
 
+FOCUS_LABELS = {
+    "unchanged": "Lesen",
+    "no-focus-request": "Im Hintergrund",
+    "changes-focus": "Wechselt den Fokus",
+    "may-change-focus": "Kann den Fokus wechseln",
+    "private-only": "Private Arbeitsfläche",
+}
+FIELD_LABELS = {
+    "window_id": "Fenster", "workspace_id": "Arbeitsfläche", "label": "Feldbeschriftung",
+    "expected_text": "Erwarteter Feldinhalt", "text": "Text", "app": "Programm",
+    "name": "Name der privaten Arbeitsfläche", "exchange": "Austauschordner (optional)",
+    "network": "Netzwerkzugang", "program": "Ausführbares Programm", "argv": "Argumente als JSON-Liste (optional)",
+    "wait_window": "Exakte Wayland-App-ID des neuen Fensters", "key": "Taste oder Tastenkürzel",
+    "x": "X-Koordinate", "y": "Y-Koordinate", "button": "Maustaste", "direction": "Scrollrichtung",
+    "steps": "Scrollschritte",
+}
+CHOICE_LABELS = {
+    "zed": "Zed", "chrome": "Google Chrome", "left": "Links", "middle": "Mitte",
+    "right": "Rechts", "up": "Nach oben", "down": "Nach unten",
+}
+PRIVATE_GATE_HELP = {
+    "private_cancel_all": "Bricht aktive Eingaben ab und sperrt neue Aufträge auf allen privaten Arbeitsflächen.",
+    "private_resume": "Erlaubt neue Aufträge auf allen privaten Arbeitsflächen.",
+}
+
 def printable(value):
     return "".join(ch if ch.isprintable() else " " for ch in str(value))
 
@@ -50,30 +75,59 @@ async def pick_id(key):
         labels = [f"{w['id']}  {w.get('app_id', '')}  {w.get('title', '')}" for w in items]
     else:
         labels = [f"{w['id']}  {w.get('output', '')} · {w.get('name') or w['idx']}" for w in items]
-    return items[await prompt(key, labels)]["id"]
+    return items[await prompt(FIELD_LABELS[key], labels)]["id"]
+
+def action_label(spec):
+    return f"{spec['title']}  ·  {FOCUS_LABELS[spec['focus']]}"
+
+async def pick_args(spec):
+    args = {}
+    for key, field in spec["inputSchema"]["properties"].items():
+        label = FIELD_LABELS[key]
+        if key in ("window_id", "workspace_id"):
+            args[key] = await pick_id(key)
+        elif "enum" in field:
+            choices = field["enum"]
+            args[key] = choices[await prompt(label, [CHOICE_LABELS[value] for value in choices])]
+        elif field["type"] == "boolean":
+            args[key] = bool(await prompt(label, ["Standard für neue Sitzung (offline)", "Netzwerkzugang anfordern"]))
+        else:
+            if field.get("default"):
+                label = f"{label} [{field['default']}]"
+            value = await prompt(label)
+            if value or "default" not in field:
+                match field["type"]:
+                    case "integer":
+                        args[key] = int(value)
+                    case "array":
+                        try:
+                            args[key] = json.loads(value)
+                        except ValueError as exc:
+                            raise ValueError('Argumente als JSON-Liste eingeben, etwa ["--option", "zwei Worte"].') from exc
+                    case _:
+                        args[key] = value
+    return args
+
+async def show_action_help(action):
+    spec = CATALOG[action]
+    rows = [FOCUS_LABELS[spec["focus"]]]
+    if action in PRIVATE_GATE_HELP:
+        rows.append(PRIVATE_GATE_HELP[action])
+    for key, field in spec["inputSchema"]["properties"].items():
+        label = FIELD_LABELS[key]
+        rows.append(f"{label} · {field['description']}" if "description" in field else label)
+    await show(spec["title"], rows)
 
 async def palette():
     entries = list(CATALOG)
-    labels = [f"{v['title']}  ·  {v['focus']}" for v in CATALOG.values()]
+    labels = [action_label(spec) for spec in CATALOG.values()]
     try:
         index = await prompt("weasel", [*labels, "Hilfe zu einer Aktion"])
         if index == len(entries):
-            action = entries[await prompt("Hilfe", labels)]
-            await show(action, json.dumps(CATALOG[action], ensure_ascii=False, indent=2).splitlines())
+            await show_action_help(entries[await prompt("Hilfe", labels)])
             return
         action = entries[index]
-        args = {}
-        for key, spec in CATALOG[action]["inputSchema"]["properties"].items():
-            if key in ("window_id", "workspace_id"):
-                args[key] = await pick_id(key)
-            elif "enum" in spec:
-                choices = spec["enum"]
-                args[key] = choices[await prompt(key, choices)]
-            else:
-                label = key if "default" not in spec else f"{key} [{spec['default']}]"
-                value = await prompt(label)
-                if value or "default" not in spec:
-                    args[key] = int(value) if spec["type"] == "integer" else value
+        args = await pick_args(CATALOG[action])
         result, images = await execute([{"action": action, "args": args}])
         row = result["steps"][0]
         if not row["ok"]:
@@ -81,6 +135,18 @@ async def palette():
         elif images:
             viewer = await asyncio.create_subprocess_exec("imv", "-", stdin=asyncio.subprocess.PIPE)
             await viewer.communicate(base64.b64decode(images[0]["data"]))
+        elif action == "private_start":
+            session = row["result"]
+            network = "Netzwerkzugang erlaubt" if session["network"] else "Offline"
+            exchange = f"/exchange ↔ {session['exchange']}" if session["exchange"] else "Kein Austauschordner"
+            await show("Private Arbeitsfläche bereit", [network, exchange])
+        elif action == "private_open":
+            window = row["result"]["window"]
+            await show("Privates Fenster geöffnet", [f"{window.get('title') or window['app_id']} · Fenster {window['id']}"])
+        elif action == "private_cancel_all":
+            await show("Private Eingaben gesperrt", ["Gilt für alle privaten Arbeitsflächen."])
+        elif action == "private_resume":
+            await show("Private Eingaben freigegeben", ["Neue Aufträge sind auf allen privaten Arbeitsflächen möglich."])
         elif CATALOG[action]["class"] == "read":
             await show(CATALOG[action]["title"],
                        json.dumps(row["result"], ensure_ascii=False, indent=2).splitlines())
@@ -126,7 +192,7 @@ async def main():
             print(json.dumps(CATALOG[args.action], ensure_ascii=False, indent=2))
         else:
             for name, action in CATALOG.items():
-                print(f"{name:20} {action['title']} ({action['class']}, {action['focus']})")
+                print(f"{name:20} {action_label(action)}")
     else:
         steps = (read_json(args.steps) if args.command == "compose"
                  else [{"action": args.action, "args": read_json(args.args)}])
