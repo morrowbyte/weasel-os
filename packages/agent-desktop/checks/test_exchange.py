@@ -21,14 +21,8 @@ with patch.dict(sys.modules), patch.object(sys, "path", [str(WORKSPACE), *sys.pa
 class ExchangeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        bindir = self.root / "bin"
-        bindir.mkdir()
-        cli = bindir / "weasel-workspace"
-        cli.write_text(f"#!{sys.executable}\nimport runpy\n"
-                       f"runpy.run_path({str(WORKSPACE / 'workspace.py')!r}, run_name='__main__')\n")
-        cli.chmod(0o700)
-        self.enterContext(patch.dict(os.environ, XDG_RUNTIME_DIR=str(self.root),
-                                     PATH=f"{bindir}:{os.environ['PATH']}"))
+        # Exchange must use the packaged Python client directly, even without a CLI in PATH.
+        self.enterContext(patch.dict(os.environ, XDG_RUNTIME_DIR=str(self.root), PATH=str(self.root)))
         base = workspace.base_dir()
         self.paths = workspace.Paths(base, "work")
         self.gate = base / "gate"
@@ -41,6 +35,7 @@ class ExchangeTests(unittest.IsolatedAsyncioTestCase):
         self.server = await asyncio.start_unix_server(self.broker.client, path=self.paths.sock)
 
     async def asyncTearDown(self):
+        await self.broker.close_exchange_worker()
         self.server.close()
         await self.server.wait_closed()
 
@@ -68,6 +63,15 @@ class ExchangeTests(unittest.IsolatedAsyncioTestCase):
         rc, result = await self.cli("compose", "--request-id", "once", "-", data=steps)
         self.assertEqual((rc, result["status"], result["remaining"]), (1, "partial", 1), result)
         listing, before, renamed, after, failed = result["steps"]
+        self.assertTrue(all(v > 0 for v in result["cli_timing_ns"].values()))
+        timings = [step.get("result", step.get("receipt"))["timing_ns"] for step in result["steps"]]
+        self.assertGreater(timings[0]["worker_start"], 0)
+        self.assertTrue(all("worker_start" not in t for t in timings[1:]))
+        for step, t in zip(result["steps"], timings):
+            self.assertGreaterEqual(step["duration_ns"], t["client_admission"] + t["client_roundtrip"])
+            self.assertGreaterEqual(t["client_roundtrip"], t["broker_dispatch"])
+            self.assertGreaterEqual(t["broker_dispatch"], t["worker_roundtrip"])
+            self.assertGreaterEqual(t["worker_roundtrip"], t["file_operation"])
         self.assertEqual(listing["result"]["entries"], ["-draft.txt", "occupied"])
         self.assertFalse(listing["result"]["truncated"])
         self.assertEqual(before["result"]["inode"], inode)
@@ -142,6 +146,34 @@ class ExchangeTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.to_thread(workspace.rpc, self.paths, {"op": "stop"})
         with self.assertRaisesRegex(workspace.BrokerError, "no running"):
             await asyncio.to_thread(workspace.rpc, self.paths, request)
+
+    async def test_disconnect_reaps_warm_worker_before_next_request(self):
+        (self.directory / "draft").touch()
+        first = await workspace.exchange_request("work", "exchange-list", [], None)
+        worker = self.broker.exchange_worker
+        waiting = asyncio.Event()
+        read_reply = worker.stdout.readline
+
+        async def observe_read():
+            waiting.set()  # The broker already wrote and drained this worker request.
+            return await read_reply()
+
+        with workspace.locked(self.gate), patch.object(worker.stdout, "readline", observe_read):
+            rename = asyncio.create_task(workspace.exchange_request(
+                "work", "exchange-rename-noreplace", ["draft", "renamed"], first["session"]))
+            await asyncio.wait_for(waiting.wait(), 5)
+            job = self.broker.active
+            rename.cancel()
+            with self.assertRaises(workspace.BrokerError) as interrupted:
+                await rename
+            self.assertEqual(interrupted.exception.reply["effect"], "unknown")
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(asyncio.shield(job), 5)
+            self.assertIsNotNone(worker.returncode)
+        self.assertFalse((self.directory / "renamed").exists())
+        again = await workspace.exchange_request("work", "exchange-list", [], first["session"])
+        self.assertEqual(again["entries"], ["draft"])
+        self.assertIn("worker_start", again["timing_ns"])
 
     async def test_unsafe_names_budget_and_admission(self):
         fd = self.broker.exchange_fd

@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import tempfile
 import time
 import uuid
@@ -13,6 +14,10 @@ from pathlib import Path
 
 from catalog import CATALOG, REQUEST_ID, plan
 from desktop import ActionError, Desktop, PIPE
+
+# Same sibling layout in the source checkout and the Nix package.
+sys.path.append(str(Path(__file__).resolve().parents[1] / "agent-workspace"))
+from workspace_client import BrokerError, exchange_request
 
 PRIVATE_INPUTS = {"private_text", "private_key", "private_click", "private_scroll"}
 
@@ -53,9 +58,10 @@ async def exchange_action(action, args, sessions):
     expected = args["session"] or sessions.get(name)
     if name in sessions and sessions[name] != expected:
         raise ValueError("Austauschordner gehört zu einer anderen Sitzung")
-    binding = ["--session", expected] if expected else []
-    values = ["--", *(args[key] for key in fields)] if fields else []
-    receipt = await workspace(name, operation, *binding, *values)
+    try:
+        receipt = await exchange_request(name, operation, [args[key] for key in fields], expected)
+    except BrokerError as exc:
+        raise ActionError(str(exc), exc.reply) from exc
     sessions[name] = receipt["session"]
     return receipt
 

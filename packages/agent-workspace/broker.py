@@ -6,6 +6,7 @@ import os
 import socket
 import struct
 import sys
+import time
 import uuid
 from pathlib import Path
 from subprocess import DEVNULL, PIPE
@@ -24,9 +25,9 @@ GET_OUTPUTS = 3
 GET_TREE = 4
 
 
-async def run(*args, data=None, pass_fds=()):
+async def run(*args, data=None):
     proc = await asyncio.create_subprocess_exec(
-        *args, stdin=PIPE if data is not None else DEVNULL, stdout=PIPE, stderr=PIPE, pass_fds=pass_fds)
+        *args, stdin=PIPE if data is not None else DEVNULL, stdout=PIPE, stderr=PIPE)
     try:
         out, err = await proc.communicate(data)
     finally:
@@ -113,6 +114,7 @@ async def act(action, typing_mode):
 class Broker:
     def __init__(self, exchange_fd=None):
         self.exchange_fd = exchange_fd
+        self.exchange_worker = None
         self.session = uuid.uuid4().hex
         self.closing = False
         self.active = None
@@ -173,6 +175,7 @@ class Broker:
                 self.active.cancel()
             if self.view:
                 await self.view.revoke()
+            await self.close_exchange_worker()
             return {"stopping": True}
         if op == "cancel":
             wanted = identifier(request["job"])
@@ -198,7 +201,7 @@ class Broker:
                 if gate["paused"] or gate["epoch"] != request["epoch"]:
                     raise RuntimeError("input paused or admission expired")
                 self.epoch = gate["epoch"]
-            work = self.exchange_operation(op, names)
+            work = self.exchange_operation(op, names, progress["timing_ns"])
         elif op == "batch":
             if self.view and self.view.manual:
                 raise RuntimeError("workspace in manual use; unfocus or close its view")
@@ -243,10 +246,44 @@ class Broker:
             await asyncio.gather(self.active, *guards, return_exceptions=True)
             self.active = self.job_id = self.epoch = None
 
-    async def exchange_operation(self, operation, names):
-        out = await run(sys.executable, "-I", HERE / "exchange.py", str(self.exchange_fd),
-                        GATE, operation, self.epoch or "", *names, pass_fds=(self.exchange_fd,))
-        return {**json.loads(out), "session": self.session, "job": self.job_id}
+    async def close_exchange_worker(self):
+        worker, self.exchange_worker = self.exchange_worker, None
+        if worker is not None:
+            if worker.returncode is None:
+                try:
+                    worker.kill()
+                except ProcessLookupError:
+                    pass
+            await worker.wait()
+
+    async def exchange_operation(self, operation, names, timing):
+        # One active job owns the pipe. Discard it on interruption, so a late
+        # reply or a blocked rename can never escape into the next job.
+        started = time.monotonic_ns()
+        try:
+            if self.exchange_worker is None or self.exchange_worker.returncode is not None:
+                self.exchange_worker = await asyncio.create_subprocess_exec(
+                    sys.executable, "-I", HERE / "exchange.py", str(self.exchange_fd), GATE,
+                    stdin=PIPE, stdout=PIPE, stderr=DEVNULL, pass_fds=(self.exchange_fd,), limit=256 << 10)
+                if await self.exchange_worker.stdout.readline() != b"ready\n":
+                    raise RuntimeError("exchange worker did not become ready")
+                timing["worker_start"] = time.monotonic_ns() - started
+            worker = self.exchange_worker
+            worker.stdin.write(json.dumps([operation, names, self.epoch]).encode() + b"\n")
+            await worker.stdin.drain()
+            line = await worker.stdout.readline()
+            if not line.endswith(b"\n"):
+                raise RuntimeError("exchange worker disconnected; effect unconfirmed")
+            reply = json.loads(line)
+        except BaseException:
+            await self.close_exchange_worker()
+            raise
+        finally:
+            timing["worker_roundtrip"] = time.monotonic_ns() - started
+        timing["file_operation"] = reply.pop("file_operation_ns")
+        if not reply.pop("ok"):
+            raise ValueError(reply["error"])
+        return {**reply, "session": self.session, "job": self.job_id}
 
     async def capture(self):
         await outputs()
@@ -258,6 +295,7 @@ class Broker:
     async def client(self, reader, writer):
         stop = False
         progress = {}
+        dispatch_started = None
         try:
             async with asyncio.timeout(5):
                 line = await reader.readline()
@@ -278,12 +316,19 @@ class Broker:
                 # Survives cancellation of the worker. Only finished actions
                 # enter results; one started action may have unknown effects.
                 progress = {"attempted": 0, "results": []}
+            if request["op"] in exchange.OPERATIONS:
+                progress["timing_ns"] = {}
+                dispatch_started = time.monotonic_ns()
             async with asyncio.timeout(MAX_SECONDS + 3):
                 result = await self.dispatch(request, reader, progress)
             stop = request["op"] == "stop"
             reply = {"ok": True, **result}
         except Exception as exc:
             reply = {"ok": False, "error": str(exc) or type(exc).__name__, **progress}
+        if dispatch_started is not None:
+            timing = progress["timing_ns"]
+            timing["broker_dispatch"] = time.monotonic_ns() - dispatch_started
+            reply["timing_ns"] = timing
         try:
             writer.write(json.dumps(reply).encode() + b"\n")
             async with asyncio.timeout(5):
@@ -346,6 +391,7 @@ async def serve():
         await asyncio.wait(watchers, return_when=asyncio.FIRST_COMPLETED)
         for task in watchers:
             task.cancel()
+    await broker.close_exchange_worker()
     drain.cancel()
     # Returning exits the namespace's main process. Bubblewrap's PID 1 then
     # exits, which tears down every remaining descendant, including daemonized apps.

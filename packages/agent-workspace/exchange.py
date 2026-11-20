@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import stat
 import sys
+import time
 
 DIRECTORY = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 MAX_ENTRIES = 128
@@ -82,9 +83,22 @@ def operate(directory, operation, names, epoch, gate_dir=Path("/run/gate")):
     return {"source": name, "destination": names[1], "renamed": True}
 
 
+def serve(directory, gate_dir):
+    # Only the owning broker writes this pipe. Requests carry only an operation, names and epoch.
+    print("ready", flush=True)
+    while line := sys.stdin.buffer.readline(8192):
+        if not line.endswith(b"\n"):
+            raise ValueError("incomplete exchange worker request")
+        operation, names, epoch = json.loads(line)
+        started = time.monotonic_ns()
+        try:
+            reply = {"ok": True, **operate(directory, operation, names, epoch, gate_dir)}
+        except (OSError, ValueError) as exc:
+            reply = {"ok": False, "error": str(exc)}
+        reply["file_operation_ns"] = time.monotonic_ns() - started
+        print(json.dumps(reply), flush=True)
+
+
 if __name__ == "__main__":
-    try:
-        _, inherited, gate_dir, operation, epoch, *names = sys.argv
-        print(json.dumps(operate(int(inherited), operation, names, epoch, Path(gate_dir))))
-    except (ValueError, OSError) as exc:
-        sys.exit(str(exc))
+    _, inherited, gate_dir = sys.argv
+    serve(int(inherited), Path(gate_dir))

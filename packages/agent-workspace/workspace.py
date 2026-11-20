@@ -1,16 +1,15 @@
 """weasel-workspace host CLI. The only input backend is the private broker."""
 import argparse
+import asyncio
 import base64
 import concurrent.futures
 import contextlib
-import fcntl
 import json
 import os
 from pathlib import Path
 import shutil
 import socket
 import sqlite3
-import stat
 import sys
 import tempfile
 import time
@@ -21,25 +20,7 @@ from actions import MAX_REPLY, MAX_REQUEST, MAX_SECONDS, identifier, validate_ba
 from exchange import OPERATIONS
 from presentation import open_window
 from sandbox import exchange_dir, spawn
-
-
-@contextlib.contextmanager
-def locked(path):
-    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield
-    finally:
-        os.close(fd)
-
-
-def private_dir(path, create=True):
-    if create:
-        path.mkdir(mode=0o700, exist_ok=True)
-    info = path.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-        raise ValueError(f"expected private directory owned by current user: {path}")
-    return path
+from workspace_client import BrokerError, Paths, exchange_request, locked, private_dir, runtime_base
 
 
 def save(path, value):
@@ -57,10 +38,7 @@ def new_gate(paused):
 
 
 def base_dir():
-    runtime = Path(os.environ.get("XDG_RUNTIME_DIR", ""))
-    if not runtime.is_absolute():
-        raise ValueError("XDG_RUNTIME_DIR must be an absolute private directory")
-    base = private_dir(private_dir(runtime, create=False) / "weasel-workspace")
+    base = runtime_base(create=True)
     gate = private_dir(base / "gate")
     with locked(gate):
         if not (gate / "state").exists():
@@ -68,46 +46,13 @@ def base_dir():
     return base
 
 
-class Paths:
-    def __init__(self, base, name):
-        self.name = identifier(name)
-        self.base = base
-        self.directory = private_dir(base / ("ws-" + name))
-        self.sock = self.directory / "control"
-        self.live = self.directory / "live"
-        self.options = self.directory / "options"
-
-    def running(self):
-        try:
-            with self.live.open("rb") as f:
-                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except FileNotFoundError:
-            pass
-        except BlockingIOError:
-            return True
-        return False
-
-
-class BrokerError(RuntimeError):
-    def __init__(self, reply):
-        super().__init__(reply["error"])
-        self.reply = reply
-
-
-def rpc(paths, request, timeout=MAX_SECONDS + 5, *, bind_running=False):
+def rpc(paths, request, timeout=MAX_SECONDS + 5):
     line = json.dumps(request, ensure_ascii=False).encode() + b"\n"
     if len(line) > MAX_REQUEST:
         raise ValueError("request exceeds 64 KiB")
     with socket.socket(socket.AF_UNIX) as peer:
         peer.settimeout(timeout)
-        if bind_running:
-            # Connect under the lifecycle lock. A restart cannot redirect this socket.
-            with locked(paths.directory):
-                if not paths.running():
-                    raise RuntimeError("workspace is stopped")
-                peer.connect(str(paths.sock))
-        else:
-            peer.connect(str(paths.sock))
+        peer.connect(str(paths.sock))
         try:
             peer.sendall(line)
             with peer.makefile("rb") as stream:
@@ -232,8 +177,11 @@ def screenshot(paths, target):
 
 
 def execute(args):
-    base = base_dir()
     op = args.command
+    if op in OPERATIONS:
+        names = [getattr(args, field) for field in OPERATIONS[op]]
+        return asyncio.run(exchange_request(args.name, op, names, args.session))
+    base = base_dir()
     if op in ("cancel-all", "resume"):
         return global_gate(base, op == "cancel-all")
     paths = Paths(base, args.name)
@@ -246,11 +194,6 @@ def execute(args):
             result = (rpc(paths, {"op": op}, timeout=4) | json.loads(paths.options.read_bytes())
                       if paths.running() else {"running": False})
             return {**result, "paused": json.loads((base / "gate/state").read_bytes())["paused"]}
-    if op in OPERATIONS:
-        gate = json.loads((base / "gate/state").read_bytes())
-        return rpc(paths, {"op": op, "names": [getattr(args, key) for key in OPERATIONS[op]],
-                           "epoch": gate["epoch"], "job": uuid.uuid4().hex,
-                           "session": args.session}, bind_running=True)
     if not paths.running():
         raise RuntimeError("workspace is stopped")
     if op == "screenshot":

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+import time
+
+PYTHON_ENTRY_NS = time.monotonic_ns()
+
 import argparse
 import asyncio
 import base64
@@ -246,7 +250,11 @@ async def main():
     else:
         steps = (read_json(args.steps) if args.command == "compose"
                  else [{"action": args.action, "args": read_json(args.args)}])
+        execute_started = time.monotonic_ns()
         result, images = await execute(steps, getattr(args, "request_id", None))
+        if any(step["action"].startswith("private_exchange_") for step in steps):
+            result["cli_timing_ns"] = {"python_entry_to_execute": execute_started - PYTHON_ENTRY_NS,
+                                       "execute": time.monotonic_ns() - execute_started}
         if images:
             result["images"] = images
         print(json.dumps(result, ensure_ascii=False))

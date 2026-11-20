@@ -4,7 +4,8 @@ import re
 from functools import cache
 from pathlib import Path, PurePosixPath
 
-NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}")
+from workspace_client import identifier
+
 MODIFIERS = {"ctrl", "shift", "alt", "logo", "altgr"}
 KEY_ALIASES = {
     "enter": "Return", "esc": "Escape", "ins": "Insert", "del": "Delete",
@@ -17,12 +18,6 @@ KEY_ALIASES = {
 MAX_REQUEST = 65536
 MAX_REPLY = 8 * 1024 * 1024
 MAX_SECONDS = 30
-
-
-def identifier(value):
-    if not isinstance(value, str) or not NAME.fullmatch(value):
-        raise ValueError("expected a 1–32 character name (letters, digits, hyphen, underscore)")
-    return value
 
 
 def integer(value, low, high):
