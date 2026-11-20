@@ -9,6 +9,7 @@
 
 use serde::{de::IgnoredAny, Deserialize};
 use std::{
+    cell::RefCell,
     env,
     io::{BufRead, BufReader, ErrorKind, Write},
     mem::{offset_of, size_of, zeroed},
@@ -85,6 +86,44 @@ pub(crate) struct FocusWitness {
     phase: Phase,
     expected: Option<u64>,
     failure: Option<&'static str>,
+}
+
+// The actor uses the same cancellation check while preparing a target, spawning
+// the helper and waiting for its reply. Keep this per worker (other clients can
+// concurrently cancel or query status) and restore it on early return/unwind.
+thread_local! {
+    static DISPATCH: RefCell<Option<FocusWitness>> = const { RefCell::new(None) };
+}
+
+pub(super) struct DispatchGuard;
+
+impl DispatchGuard {
+    pub(super) fn arm(witness: FocusWitness) -> WitnessResult<Self> {
+        DISPATCH.with(|slot| {
+            let mut current = slot.borrow_mut();
+            if current.is_some() { return Err("Background dispatch already armed"); }
+            *current = Some(witness);
+            Ok(Self)
+        })
+    }
+
+    pub(super) fn finish(self, cancelled: impl Fn() -> bool) -> WitnessResult<()> {
+        let witness = DISPATCH.with(|slot| slot.borrow_mut().take()).ok_or(UNAVAILABLE)?;
+        witness.finish(cancelled)
+    }
+}
+
+impl Drop for DispatchGuard {
+    fn drop(&mut self) {
+        DISPATCH.with(|slot| { slot.borrow_mut().take(); });
+    }
+}
+
+pub(super) fn check_dispatch() -> WitnessResult<()> {
+    DISPATCH.with(|slot| match slot.borrow_mut().as_mut() {
+        Some(witness) => witness.check(|| false),
+        None => Ok(()),
+    })
 }
 
 // A blocking AF_UNIX connect can wait indefinitely on a full accept queue.
@@ -284,6 +323,17 @@ mod tests {
         server.write_all(b"{\"WindowFocusChanged\":{\"id\":2}}\n{\"WindowFocusChanged\":{\"id\":1}}\n").unwrap();
         assert_eq!(witness.check(|| false), Err(CHANGED));
         assert_eq!(witness.finish(|| false), Err(CHANGED));
+    }
+
+    #[test]
+    fn in_flight_dispatch_check_latches_transition_and_releases_thread_guard() {
+        let (mut server, witness) = fixture();
+        let dispatch = DispatchGuard::arm(witness).unwrap();
+        assert_eq!(check_dispatch(), Ok(()));
+        server.write_all(b"{\"WindowFocusChanged\":{\"id\":null}}\n").unwrap();
+        assert_eq!(check_dispatch(), Err(CHANGED));
+        assert_eq!(dispatch.finish(|| false), Err(CHANGED));
+        assert_eq!(check_dispatch(), Ok(()));
     }
 
     #[test]

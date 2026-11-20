@@ -674,7 +674,8 @@ fn check_epoch(state: &State, epoch: Option<u64>) -> R<()> {
     if epoch.is_some_and(|e| state.epoch.load(Ordering::SeqCst) != e) {
         Err("Canceled Computer Use or desktop taken over; queued actions discarded. Ask the user why they stopped and await further instructions before a new task. Do not automatically resume or replay.".into())
     } else {
-        state.input_policy.check_bound()
+        state.input_policy.check_bound()?;
+        focus_witness::check_dispatch().map_err(str::to_owned)
     }
 }
 
@@ -2948,13 +2949,20 @@ fn act_inner(state: &State, args: &Value, epoch: u64) -> R<Value> {
             }
             let cancelled = || check_epoch(state, Some(epoch)).is_err()
                 || background_semantic_ready(state).is_err();
-            let mut witness = if background_semantic {
+            let mut target_input_guard = None;
+            let witness = if let Some(target_id) = background_id {
                 let windows = niri_window_identities(state, Some(epoch))?;
                 let previous_focus = focused(&windows).and_then(|w| w["id"].as_u64())
                     .ok_or("No foreground toplevel focus to guard for background dispatch")?;
-                Some(focus_witness::FocusWitness::start(Some(previous_focus), cancelled)?)
+                if previous_focus == target_id {
+                    let generation = state.input_policy.generation();
+                    state.input_policy.check(generation)?;
+                    target_input_guard = Some(input_policy::Guard::bind(generation));
+                }
+                let stream = focus_witness::FocusWitness::start(Some(previous_focus), cancelled)?;
+                Some(focus_witness::DispatchGuard::arm(stream)?)
             } else { None };
-            if let Some(focus) = witness.as_mut() { focus.check(cancelled)?; }
+            check_epoch(state, Some(epoch))?;
             dispatched = true;
             record(
                 state,
@@ -2972,6 +2980,7 @@ fn act_inner(state: &State, args: &Value, epoch: u64) -> R<Value> {
                 result?;
                 sampled?;
             } else { result?; }
+            drop(target_input_guard);
             Ok(())
         })();
         let ok = result.is_ok();
