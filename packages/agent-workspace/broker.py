@@ -20,6 +20,7 @@ HERE = Path(__file__).resolve().parent
 RUNTIME = Path("/run/workspace")
 GATE = Path("/run/gate")
 FAST_WTYPE = "@fastWtype@"
+X11_TEXT = HERE / "workspace-x11-text"
 IPC_HEADER = struct.Struct("=6sII")
 GET_OUTPUTS = 3
 GET_TREE = 4
@@ -33,12 +34,24 @@ async def run(*args, data=None):
     finally:
         if proc.returncode is None:
             try:
+                if args[0] == X11_TEXT:
+                    # Complete the in-flight key release and restore any borrowed
+                    # X mapping before the broker acknowledges a cancellation.
+                    proc.terminate()
+                    await asyncio.wait_for(proc.wait(), 1)
+                else:
+                    proc.kill()
+            except TimeoutError:
                 proc.kill()
             except ProcessLookupError:
                 pass
             await proc.wait()
     if proc.returncode:
         raise RuntimeError(f"{Path(args[0]).name} exited {proc.returncode}: {err[-800:].decode(errors='replace')}")
+    if args[0] == X11_TEXT and err:
+        # libxdo can diagnose an unrepresentable codepoint on stderr and
+        # continue. A partial text operation must not be reported as success.
+        raise RuntimeError(f"private X11 text: {err[-800:].decode(errors='replace')}")
     return out
 
 
@@ -104,9 +117,12 @@ async def act(action, typing_mode):
                     return window
             await asyncio.sleep(0.05)
     if name in ("text", "key"):
-        if not any(w["focused"] for w in await windows()):
+        focused = next((w for w in await windows() if w["focused"]), None)
+        if focused is None:
             raise RuntimeError("no focused application in this workspace")
-        if name == "text":
+        if name == "text" and focused.get("x11_window"):
+            await run(X11_TEXT, str(focused["x11_window"]), data=args[0].encode())
+        elif name == "text":
             # One stdin keymap chunk in wtype 0.4 holds up to 100 characters.
             wtype = FAST_WTYPE if typing_mode == "fast" and len(args[0]) <= 100 else "wtype"
             await run(wtype, "-", data=args[0].encode())

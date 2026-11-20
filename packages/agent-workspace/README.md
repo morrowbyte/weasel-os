@@ -114,7 +114,9 @@ eine Anwendung für `Ctrl+s` die üblichen Tastencodes für Strg und S.
 Explizites `Shift` bleibt beim Haupttastendruck aktiv. Für XKB-Symbole,
 die auf der Karte weder direkt noch mit Shift erreichbar sind, trägt der
 Helfer das gewünschte Symbol für diesen Aufruf auf F24 ein. `text` sendet
-Unicode weiterhin über wtype.
+Unicode in Wayland-Fenster über wtype. Für ein X11-Fenster liest der
+Texteingabehelfer die Tastaturbelegung des privaten X-Servers und prüft
+vor jedem Zeichen den X-Eingabefokus gegen die von Sway gemeldete Fenster-ID.
 
 Gängige Schreibweisen wie `Enter`, `Esc`, `PgUp`, `PgDn`, `Ins`, `Del`,
 `Bksp`, `Spacebar` und `ArrowLeft` sind auch in Großbuchstaben und mit

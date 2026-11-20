@@ -21,10 +21,14 @@ def check_legacy_app() -> None:
             stat -Lc '%d:%i' "$sock" > /exchange/socket-id
             readlink /proc/self/ns/net > /exchange/network
             IFS= read -r line
-            printf '%s\\n' "$line" > /exchange/saved.txt
+            printf '%s\\n' "$line" > /exchange/line.tmp
+            mv /exchange/line.tmp /exchange/saved.txt
+            IFS= read -r line
+            printf '%s\\n' "$line" > /exchange/line.tmp
+            mv /exchange/line.tmp /exchange/utf8.txt
         """
         request = {"name": "legacy", "program": "@xterm@", "wait_window": "XTerm",
-                   "argv": ["-name", "private-legacy", "-fa", "DejaVu Sans Mono",
+                   "argv": ["-name", "private-legacy", "-u8", "-fa", "DejaVu Sans Mono",
                             "-e", "/bin/sh", "-c", child]}
         receipt = json.loads(machine.succeed(operator(shlex.join(
             ["weasel", "run", "private_open", json.dumps(request)]
@@ -42,7 +46,15 @@ def check_legacy_app() -> None:
         machine.send_chars("host", delay=0.15)
         for action in (["text", "legacy"], ["key", "1"], ["key", "Return"]):
             machine.succeed(operator(shlex.join([*legacy, *action])))
-        machine.wait_until_succeeds(f"printf 'legacy1\\n' | cmp - {share}/saved.txt", timeout=15)
+        machine.wait_until_succeeds(f"test -f {share}/saved.txt", timeout=15)
+        actual = bytes.fromhex(machine.succeed(f"od -An -tx1 {share}/saved.txt"))
+        assert actual == b"legacy1\n", actual.hex(" ")
+        sample = "Grüße € 界"
+        for action in (["text", sample], ["key", "Return"]):
+            machine.succeed(operator(shlex.join([*legacy, *action])))
+        machine.wait_until_succeeds(f"test -f {share}/utf8.txt", timeout=15)
+        actual = bytes.fromhex(machine.succeed(f"od -An -tx1 {share}/utf8.txt"))
+        assert actual == (sample + "\n").encode(), actual.hex(" ")
         finish_draft("legacy", "host")
     finally:
         machine.succeed(operator(shlex.join([*legacy, "stop"])))

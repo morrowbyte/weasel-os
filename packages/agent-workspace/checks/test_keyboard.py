@@ -15,6 +15,18 @@ import workspace
 
 
 class KeyboardTests(unittest.IsolatedAsyncioTestCase):
+    async def test_text_uses_the_focused_windows_keymap(self):
+        sample = "Grüße € 界"
+        legacy = {"focused": True, "x11_window": 4194309}
+        native = {"focused": False, "app_id": "foot"}
+        with patch.object(broker, "windows", return_value=[native, legacy]), \
+             patch.object(broker, "run", new_callable=AsyncMock) as run:
+            await broker.act(["text", sample], "fast")
+            run.assert_awaited_once_with(broker.X11_TEXT, "4194309", data=sample.encode())
+            native["focused"], legacy["focused"] = True, False
+            await broker.act(["text", sample], "fast")
+            run.assert_awaited_with(broker.FAST_WTYPE, "-", data=sample.encode())
+
     async def test_cli_and_broker_aliases(self):
         cases = {
             "ENTER": "Return", "eSc": "Escape", "PGUP": "Page_Up", "PgDn": "Page_Down",
