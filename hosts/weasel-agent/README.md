@@ -22,8 +22,10 @@ Die QEMU-VM verwendet eine virtuelle Grafikausgabe. Weston stellt dafür einen M
 | Super+F1 | Tastenkürzel anzeigen |
 | Super+Bild↑ / Bild↓ | Arbeitsfläche wechseln |
 | Alt+Escape | Aktuellen Desktop-Auftrag abbrechen und private Eingaben sperren |
+| Strg+Alt+Escape | Die Steuerung des persönlichen Desktops übernehmen |
+| Super+Umschalt+A | Den persönlichen Desktop nach Sitzungsstart oder Übernahme für neue Aufträge freigeben |
 
-Das erste Beispiel funktioniert im Terminal und benötigt kein Modellkonto:
+Nach der Anmeldung gibt Super+Umschalt+A den persönlichen Desktop frei. Die gleiche Aktion ist im Terminal als `weasel resume-desktop` verfügbar. Das erste Beispiel benötigt kein Modellkonto:
 
 ```sh
 weasel catalog

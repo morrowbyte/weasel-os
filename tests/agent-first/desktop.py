@@ -94,6 +94,13 @@ except Exception:
 with subtest("Set up a Mousepad background target and an active foot draft on Niri"):
     # Dismiss Niri's first-login hotkey overlay before any draft is open.
     machine.send_key("spc", delay=0.15)
+    machine.wait_until_succeeds(operator(
+        """weasel-computer-use call desktop_status '{}' | jq -e '.content[0].text | fromjson | .resume_input_readiness.ready'"""
+    ), timeout=30)
+    machine.send_key("meta_l-shift-a")
+    machine.wait_until_succeeds(operator(
+        """weasel-computer-use call desktop_status '{}' | jq -e '.content[0].text | fromjson | .takeover_latched == false'"""
+    ), timeout=15)
     # Seed known short contents. Only the application's UI changes these files thereafter.
     machine.succeed(operator('printf actorbefore > "$HOME/actor-target.txt"'))
     machine.succeed(

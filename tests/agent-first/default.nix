@@ -44,7 +44,6 @@ testers.runNixOSTest {
           block-out-from "screen-capture"
       }
     '';
-    nixpkgs.config.allowUnfreePredicate = pkg: lib.getName pkg == "chatgpt";
     environment.systemPackages = [
       jq
       pkgs.imagemagick

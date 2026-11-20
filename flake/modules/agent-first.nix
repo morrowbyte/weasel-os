@@ -9,10 +9,14 @@
     { system, ... }:
     let
       pkgs = inputs.nixpkgs.legacyPackages.${system};
+      testPkgs = import inputs.nixpkgs {
+        inherit system;
+        config.allowUnfreePredicate = pkg: pkgs.lib.getName pkg == "chatgpt";
+      };
     in
     {
       packages.agent-workspace = pkgs.callPackage ../../packages/agent-workspace { };
       packages.agent-desktop = pkgs.callPackage ../../packages/agent-desktop { };
-      checks.agent-first-desktop = pkgs.callPackage ../../tests/agent-first { };
+      checks.agent-first-desktop = testPkgs.callPackage ../../tests/agent-first { };
     };
 }

@@ -13,6 +13,7 @@ binds {
     Super+F1 hotkey-overlay-title="Keyboard shortcuts" { show-hotkey-overlay; }
     Alt+Escape allow-inhibiting=false hotkey-overlay-title="Stop agent input" { spawn "@cancel@"; }
     Ctrl+Alt+Escape allow-inhibiting=false hotkey-overlay-title="Take control of desktop" { spawn "weasel-computer-use" "call" "desktop_takeover" "{}"; }
+    Super+Shift+A hotkey-overlay-title="Allow desktop control" { spawn "weasel" "resume-desktop"; }
     Super+Left { focus-column-left; }
     Super+Right { focus-column-right; }
     Super+Up { focus-window-up; }

@@ -5,9 +5,11 @@ import base64
 import json
 import os
 import sys
+from contextlib import AsyncExitStack
 
 from actions import execute
 from catalog import CATALOG, catalog
+from desktop import ActionError, Desktop
 from server import serve
 
 FOCUS_LABELS = {
@@ -160,6 +162,7 @@ def parse_args():
     sub.add_parser("catalog", help="Maschinenlesbaren JSON-Katalog ausgeben")
     sub.add_parser("mcp", help="MCP über stdio starten")
     sub.add_parser("desktop-mcp", help="Vollen originalen Actor-MCP starten")
+    sub.add_parser("resume-desktop", help="Den aktuellen Desktop nach Start oder Übernahme ausdrücklich freigeben")
     help_cmd = sub.add_parser("help", help="Aktionen mit Fokuswirkung oder eine Eingabemaske anzeigen")
     help_cmd.add_argument("action", nargs="?", choices=CATALOG)
     run = sub.add_parser("run", help="Einzelaktion mit JSON-Objekt ausführen")
@@ -183,6 +186,21 @@ async def main():
         await palette()
     elif args.command == "desktop-mcp":
         os.execlp("weasel-computer-use", "weasel-computer-use", "mcp")
+    elif args.command == "resume-desktop":
+        async with AsyncExitStack() as stack:
+            desktop = Desktop(stack)
+            status = await desktop.call("desktop_status")
+            binding = {"expected_epoch": status["epoch"], "expected_session_id": status["session_id"]}
+            # The user's hotkey must be released. Another stop invalidates this request.
+            deadline = asyncio.get_running_loop().time() + 2
+            while status["takeover_latched"] and not status["resume_input_readiness"]["ready"]:
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise ActionError("Freigabe erfordert einen bereiten Eingabemonitor und losgelassene Tasten")
+                await asyncio.sleep(0.05)
+                status = await desktop.call("desktop_status")
+                if (status["session_id"], status["epoch"]) != (binding["expected_session_id"], binding["expected_epoch"]):
+                    raise ActionError("Die Desktop-Sitzung oder der Stopp hat sich geändert")
+            print(json.dumps(await desktop.call("desktop_resume", binding)))
     elif args.command == "mcp":
         await serve()
     elif args.command == "catalog":
@@ -206,7 +224,7 @@ async def main():
 if __name__ == "__main__":
     try:
         sys.exit(asyncio.run(main()))
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, ActionError) as error:
         print(json.dumps({"status": "invalid", "error": str(error), "automatic_replay": False}))
         sys.exit(2)
     except KeyboardInterrupt:
