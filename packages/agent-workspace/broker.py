@@ -26,7 +26,7 @@ GET_OUTPUTS = 3
 GET_TREE = 4
 
 
-async def run(*args, data=None):
+async def run(*args, data=None, release_drag=False):
     proc = await asyncio.create_subprocess_exec(
         *args, stdin=PIPE if data is not None else DEVNULL, stdout=PIPE, stderr=PIPE)
     try:
@@ -34,9 +34,9 @@ async def run(*args, data=None):
     finally:
         if proc.returncode is None:
             try:
-                if args[0] == X11_TEXT:
-                    # Complete the in-flight key release and restore any borrowed
-                    # X mapping before the broker acknowledges a cancellation.
+                if release_drag or args[0] == X11_TEXT:
+                    # The helper must release the held key or mouse button
+                    # before the broker acknowledges cancellation.
                     proc.terminate()
                     await asyncio.wait_for(proc.wait(), 1)
                 else:
@@ -130,7 +130,7 @@ async def act(action, typing_mode):
             await run(HERE / "workspace-keyboard", *chord(args[0]))
     else:
         await outputs()
-        await run(HERE / "workspace-pointer", name, *map(str, args))
+        await run(HERE / "workspace-pointer", name, *map(str, args), release_drag=name == "drag")
     return {"action": name}
 
 
@@ -153,6 +153,12 @@ class Broker:
     def admitted(self):
         gate = self.gate()
         return not gate["paused"] and gate["epoch"] == self.epoch
+
+    def cancel_active(self):
+        # Gate, disconnect, timeout and explicit cancel can race. Allow the
+        # first cancellation to finish releasing a held pointer button.
+        if self.active and not self.active.cancelling():
+            self.active.cancel()
 
     async def watch_gate(self):
         while self.admitted():
@@ -193,15 +199,14 @@ class Broker:
             stopped = None
             if self.active and self.epoch is not None and not self.admitted():
                 stopped = self.job_id
-                self.active.cancel()
+                self.cancel_active()
                 await asyncio.gather(self.active, return_exceptions=True)
             if self.view and not self.view.admitted(self):
                 await self.view.revoke()
             return {"interrupted": stopped}
         if op == "stop":
             self.closing = True
-            if self.active:
-                self.active.cancel()
+            self.cancel_active()
             if self.view:
                 await self.view.revoke()
             await self.close_exchange_worker()
@@ -210,7 +215,7 @@ class Broker:
             wanted = identifier(request["job"])
             if not self.active or self.job_id != wanted:
                 raise ValueError("no active job with that name")
-            self.active.cancel()
+            self.cancel_active()
             await asyncio.gather(self.active, return_exceptions=True)
             return {"cancelled": wanted}
         if self.active:
@@ -269,7 +274,7 @@ class Broker:
                 raise RuntimeError(f"job {job} revoked by input gate")
             raise TimeoutError(f"job {job} exceeded {MAX_SECONDS}s")
         finally:
-            self.active.cancel()
+            self.cancel_active()
             for task in guards:
                 task.cancel()
             await asyncio.gather(self.active, *guards, return_exceptions=True)

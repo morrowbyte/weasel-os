@@ -126,6 +126,71 @@ class PrivateTransport(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ActionError, "already submitted"):
                 await compose.workspace("default", "batch", failure["job"], payload=[["key", "a"]])
 
+    async def test_pointer_bounds_default_button_and_dispatch_order(self):
+        move = {"action": "private_move", "args": {"x": 0, "y": 719}}
+        coords = {"start_x": 1279, "start_y": 719, "end_x": 0, "end_y": 0}
+        drag = {"action": "private_drag", "args": coords}
+        with patch.object(broker, "outputs", new_callable=AsyncMock) as geometry, \
+             patch.object(broker, "run", new_callable=AsyncMock) as run:
+            for field, value in (("end_x", 1280), ("start_x", -1), ("end_y", 720),
+                                 ("start_y", True), ("button", "extra")):
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    await compose.execute([move, {**drag, "args": {**coords, field: value}}])
+            with self.assertRaises(ActionError):
+                await compose.workspace("default", "batch", "bad-end", payload=[
+                    ["move", 0, 719], ["drag", 5, 0, 1279, 720]])
+            run.assert_not_awaited()
+            result, _ = await compose.execute([move, drag, {**drag, "args": {**coords, "button": "middle"}}])
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(len({s["job"] for s in result["steps"]}), 1)
+        self.assertEqual(geometry.await_count, 3)
+        self.assertEqual([call.args[1:] for call in run.await_args_list], [
+            ("move", "0", "719"), ("drag", "1279", "719", "0", "0", "left"),
+            ("drag", "1279", "719", "0", "0", "middle")])
+
+    async def test_gate_and_cancel_wait_for_drag_release(self):
+        # Keep the helper's final release pending while both guards fire.
+        # No Wayland input or compositor is needed for this ordering check.
+        entered, terminating, released = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        process = Mock(returncode=None)
+
+        async def communicate(data):
+            entered.set()
+            await asyncio.Future()
+
+        async def wait():
+            await released.wait()
+            process.returncode = 1
+            return 1
+
+        process.communicate = communicate
+        process.terminate = terminating.set
+        process.wait = wait
+        reader = asyncio.StreamReader()
+        state = self.broker.gate()
+        request = {"op": "batch", "job": "drag", "epoch": state["epoch"],
+                   "actions": [["drag", 0, 0, 1279, 719, "right"], ["move", 0, 0]]}
+        progress = {"results": [], "attempted": 0}
+        with patch.object(broker, "outputs", new_callable=AsyncMock), \
+             patch.object(asyncio, "create_subprocess_exec", return_value=process) as spawn:
+            task = asyncio.create_task(self.broker.dispatch(request, reader, progress))
+            await asyncio.wait_for(entered.wait(), 1)
+            cancel = asyncio.create_task(self.broker.dispatch({"op": "cancel", "job": "drag"}, reader, {}))
+            await asyncio.wait_for(terminating.wait(), 1)
+            state["paused"] = True
+            gate = asyncio.create_task(self.broker.dispatch({"op": "gate"}, reader, {}))
+            await asyncio.sleep(0)
+            self.assertFalse(cancel.done() or gate.done() or task.done())
+            released.set()
+            await asyncio.gather(cancel, gate)
+            with self.assertRaisesRegex(RuntimeError, "cancelled|revoked"):
+                await task
+            with self.assertRaisesRegex(RuntimeError, "paused"):
+                await self.broker.dispatch(request, reader, progress)
+        process.kill.assert_not_called()
+        spawn.assert_awaited_once()
+        self.assertEqual(progress, {"attempted": 1, "results": []})
+
     async def test_original_job_cancel_and_timeout_retain_prefix(self):
         for guard in ("cancel", "timeout"):
             entered = asyncio.Event()

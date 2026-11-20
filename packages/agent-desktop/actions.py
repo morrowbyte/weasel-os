@@ -19,7 +19,7 @@ from desktop import ActionError, Desktop, PIPE
 sys.path.append(str(Path(__file__).resolve().parents[1] / "agent-workspace"))
 from workspace_client import BrokerError, exchange_request
 
-PRIVATE_INPUTS = {"private_text", "private_key", "private_click", "private_scroll"}
+PRIVATE_INPUTS = {"private_text", "private_key", "private_click", "private_scroll", "private_move", "private_drag"}
 
 async def workspace(name, *args, payload=None):
     process = await asyncio.create_subprocess_exec(

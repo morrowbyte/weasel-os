@@ -99,6 +99,8 @@ zurückgewiesen.
 | `screenshot DATEI.png` | Schreibt das vollständige private Bild als neue Datei auf dem Host. |
 | `key Ctrl+Shift+s`, `text TEXT` | Sendet einen XKB-Tastennamen mit optionalen Modifikatoren bzw. Unicode-Text an das fokussierte private Fenster. |
 | `click X Y [left\|middle\|right]` | Klickt in absoluten Pixelkoordinaten, standardmäßig links. |
+| `move X Y` | Bewegt den privaten Zeiger zur angegebenen Position. |
+| `drag START_X START_Y END_X END_Y [left\|middle\|right]` | Drückt am Start die gewählte Taste (Standard links), zieht bis zum Ziel und lässt dort los. Bei Abbruch lässt der Helfer an der erreichten Position los. |
 | `scroll X Y up\|down\|left\|right [SCHRITTE]` | Scrollt 1 bis 32 Rastschritte an dieser Position. |
 | `batch JOB` | Liest ein JSON-Array von Aktionsarrays aus stdin. |
 | `cancel JOB` | Bricht diesen aktuell laufenden Auftrag der benannten Sitzung ab. |

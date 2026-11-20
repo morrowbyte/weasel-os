@@ -67,13 +67,18 @@ def validate(action):
         if not keysym_lookup()(key.encode("ascii"), 1):
             raise ValueError(f"unknown XKB keysym {key!r}")
         return ["key", "+".join([*modifiers, key])]
-    if name in ("click", "scroll") and 2 <= len(args) <= 4:
+    if name in ("move", "click", "drag", "scroll") and 2 <= len(args) <= 5:
         x, y = integer(args[0], 0, 1279), integer(args[1], 0, 719)
-        if name == "click" and len(args) <= 3:
-            button = args[2] if len(args) == 3 else "left"
+        if name == "move" and len(args) == 2:
+            return [name, x, y]
+        if (name == "click" and len(args) in (2, 3)) or (name == "drag" and len(args) in (4, 5)):
+            coords = [x, y]
+            if name == "drag":
+                coords += [integer(args[2], 0, 1279), integer(args[3], 0, 719)]
+            button = args[-1] if len(args) > len(coords) else "left"
             if button in ("left", "middle", "right"):
-                return [name, x, y, button]
-        if name == "scroll" and len(args) >= 3 and args[2] in ("up", "down", "left", "right"):
+                return [name, *coords, button]
+        if name == "scroll" and len(args) in (3, 4) and args[2] in ("up", "down", "left", "right"):
             return [name, x, y, args[2], integer(args[3], 1, 32) if len(args) == 4 else 1]
     raise ValueError(f"invalid arguments for {name!r}")
 

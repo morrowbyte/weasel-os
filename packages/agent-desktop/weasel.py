@@ -32,6 +32,7 @@ FIELD_LABELS = {
     "network": "Netzwerkzugang", "program": "Ausführbares Programm", "argv": "Argumente als JSON-Liste (optional)",
     "wait_window": "Wayland-App-ID oder X11-Klasse des neuen Fensters", "key": "Taste oder Tastenkürzel",
     "x": "X-Koordinate", "y": "Y-Koordinate", "button": "Maustaste", "direction": "Scrollrichtung",
+    "start_x": "Start X", "start_y": "Start Y", "end_x": "Ziel X", "end_y": "Ziel Y",
     "steps": "Scrollschritte", "filename": "Dateiname",
     "source": "Bisheriger Dateiname", "destination": "Neuer Dateiname",
     "session": "Sitzungskennung (optional)",

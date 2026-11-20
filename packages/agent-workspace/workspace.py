@@ -262,6 +262,7 @@ def main():
     commands.add_parser("screenshot").add_argument("file")
     for name, description in (("open", "-- PROGRAM [ARG ...]"), ("key", "CHORD"), ("text", "TEXT"),
                               ("wait-window", "APP_ID"), ("click", "X Y [BUTTON]"),
+                              ("move", "X Y"), ("drag", "START_X START_Y END_X END_Y [BUTTON]"),
                               ("scroll", "X Y DIRECTION [STEPS]")):
         commands.add_parser(name, usage=f"%(prog)s {description}").add_argument("values", nargs=argparse.REMAINDER)
     args = parser.parse_args()
