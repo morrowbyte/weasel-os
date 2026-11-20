@@ -399,3 +399,42 @@ A canvas without accessible actions needs an application API or an
 instance opened in the private agent workspace for independent seat input.
 Existing windows stay on their original seat. The actor sends no global
 background key or pointer events and never focuses a window to simulate this route.
+
+#### Can a second seat drive an already-connected client?
+
+Wayland delivers keys and pointer buttons on device objects created by the
+client for a particular seat. The compositor selects a surface with an enter
+event for that seat. A second Niri seat gets its own input devices, but a client
+must bind them for events to reach it. Acknowledging an IPC call or advertising
+a seat does not establish delivery. [Wayland core protocol](https://wayland.freedesktop.org/docs/html/apa.html#protocol-spec-wl_seat)
+
+* Chromium's Ozone backend returns immediately from `WaylandSeat::Instantiate`
+  when the connection already has a seat. This is a concrete counterexample
+  for an existing Chromium window, including another window on the same
+  connection as the human's foreground window. Reusing its first keyboard
+  would move that keyboard's focus. An application integration can operate
+  on supported content; independent seat input requires a separately started
+  instance. [Chromium source](https://chromium.googlesource.com/chromium/src/+/134d9899a526d327e9099a47d5d2c9534ad0a263/ui/ozone/platform/wayland/host/wayland_seat.cc#26)
+* GTK4 registers each newly advertised seat and requests that seat's devices
+  according to its capabilities. A client-specific pointer-only experiment is
+  therefore possible for a GTK canvas. Toolkit registration alone does not
+  establish which widget an application will operate on. [GTK registry](https://github.com/GNOME/gtk/blob/cec8bc63ea8e57dab3e14ba7e1a322a4371a0a80/gdk/wayland/gdkdisplay-wayland.c#L591-L605) · [GTK pointer binding](https://github.com/GNOME/gtk/blob/cec8bc63ea8e57dab3e14ba7e1a322a4371a0a80/gdk/wayland/gdkseat-wayland.c#L2401-L2405)
+
+A bounded compositor implementation for cooperating clients would first expose
+a seat only to the target Wayland connection and verify a live `wl_pointer`
+resource on **that seat** using `client_pointers`. It would pick the input
+surface within the selected window's popup/subsurface tree using the exact
+captured frame transform. Niri would have to route cursor updates, popup
+grabs and activation serials separately before issuing a press and release.
+The pinned compositor currently shares its cursor manager, uses the primary
+seat for popup grabs and can activate a global layout window on an activation
+request. The pixel IPC therefore grants no click or keyboard authority.
+[Smithay seat publication](https://github.com/Smithay/smithay/blob/ff5fa7df392cecfba049ffed55cdaa4e98a8e7ef/src/wayland/seat/mod.rs#L167-L180) · [Smithay bound pointers](https://github.com/Smithay/smithay/blob/ff5fa7df392cecfba049ffed55cdaa4e98a8e7ef/src/wayland/seat/pointer.rs#L53-L57) · [Niri cursor and LEDs](https://github.com/niri-wm/niri/blob/8ed0da44d974c32c6877d2f4630c314da0717ecb/src/handlers/mod.rs#L110-L139) · [Niri activation](https://github.com/niri-wm/niri/blob/8ed0da44d974c32c6877d2f4630c314da0717ecb/src/handlers/mod.rs#L778-L837) · [Niri popup grabs](https://github.com/niri-wm/niri/blob/8ed0da44d974c32c6877d2f4630c314da0717ecb/src/handlers/xdg_shell.rs#L332-L365)
+
+The acceptance case for such a route is an already-open GTK canvas that records
+one correct hit while the human types in another window. Verify the client
+resource binding, surface-local hit, uninterrupted foreground keystrokes,
+focus event stream, cursor and clipboard; also verify refusal when the target
+client ignores the seat. This partial route is a design candidate. The current
+actor supports object actions for accessible windows and read-only window
+pixels for canvases in the agent-first Niri variant.
