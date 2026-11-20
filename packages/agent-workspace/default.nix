@@ -62,7 +62,7 @@ stdenv.mkDerivation {
     protocol=${wtype.src}/protocol/virtual-keyboard-unstable-v1.xml
     wayland-scanner client-header "$protocol" keyboard-protocol.h
     wayland-scanner private-code "$protocol" keyboard-protocol.c
-    $CC -Wall -Wextra -Werror keyboard.c keyboard-protocol.c -o workspace-keyboard $(pkg-config --cflags --libs wayland-client xkbcommon)
+    $CC -Wall -Wextra -Werror keyboard.c keyboard-protocol.c pointer-protocol.c -o workspace-keyboard $(pkg-config --cflags --libs wayland-client xkbcommon)
     $CC -Wall -Wextra -Werror viewer.c -o workspace-view $(pkg-config --cflags --libs gtk-vnc-2.0 gtk+-3.0)
     runHook postBuild
   '';

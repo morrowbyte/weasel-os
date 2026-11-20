@@ -113,6 +113,9 @@ auf dem menschlichen Desktop hat seinen eigenen Abbruchweg.
   Netzwerk-Namespace, Prozessumgebung, Home, Runtime, D-Bus, Clipboard,
   App-Konfiguration und Singleton-Sockets gehören zur privaten Sitzung.
   Der Broker nimmt nur seinen vererbten lokalen Kontrollsocket entgegen.
+- Vor der ersten Anwendung meldet der private Seat eine virtuelle Tastatur
+  und einen virtuellen Zeiger an. Ein Helfer hält beide Geräte bis zum Ende
+  der Sitzung, damit Anwendungen sie auch zwischen einzelnen Aktionen sehen.
 - Der Nix-Store ist schreibgeschützt lesbar. Es gibt ein minimales privates
   `/dev` und ein privates `/proc`. Host-Home, Host-D-Bus, Display-Sockets,
   Host-Konfigurationsprofile, Audiogeräte und physische Eingabegeräte werden

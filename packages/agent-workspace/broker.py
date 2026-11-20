@@ -268,13 +268,18 @@ async def serve():
                 if len(displays) == len(ipc) == 1 and (RUNTIME / "bus").is_socket():
                     os.environ.update(WAYLAND_DISPLAY=displays[0].name, SWAYSOCK=str(ipc[0]))
                     await outputs()
+                    # Bind both device types before an application can connect.
+                    seat = await asyncio.create_subprocess_exec(
+                        HERE / "workspace-keyboard", "--hold-seat", stdin=DEVNULL, stdout=PIPE)
+                    if await seat.stdout.readline() != b"ready\n":
+                        raise RuntimeError("private seat initialization failed")
                     break
                 await asyncio.sleep(0.05)
     except Exception as exc:
         raise RuntimeError(f"private desktop startup failed: {exc}; {tail.decode(errors='replace')}") from exc
     broker = Broker()
     async with await asyncio.start_unix_server(broker.client, sock=listener, limit=MAX_REQUEST):
-        watchers = [asyncio.create_task(p.wait()) for p in (bus, sway)]
+        watchers = [asyncio.create_task(p.wait()) for p in (bus, sway, seat)]
         watchers.append(asyncio.create_task(broker.stopping.wait()))
         await asyncio.wait(watchers, return_when=asyncio.FIRST_COMPLETED)
         for task in watchers:
