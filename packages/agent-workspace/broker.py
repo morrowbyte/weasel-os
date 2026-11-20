@@ -226,7 +226,7 @@ async def serve():
         raise RuntimeError("expected an inherited Unix listener")
     Path("/etc/machine-id").write_text(uuid.uuid4().hex + "\n")
     bus = await asyncio.create_subprocess_exec(
-        "dbus-daemon", "--session", "--nofork", "--nopidfile",
+        "dbus-daemon", "--config-file=@dbusConf@", "--nofork", "--nopidfile",
         "--address=" + os.environ["DBUS_SESSION_BUS_ADDRESS"], stdin=DEVNULL, stdout=DEVNULL)
     # Sway sees no parent display or IPC endpoint. Discover only its private sockets.
     sway = await asyncio.create_subprocess_exec("sway", "-c", HERE / "sway.conf",

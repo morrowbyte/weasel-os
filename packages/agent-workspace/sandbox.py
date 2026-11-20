@@ -46,7 +46,6 @@ def sandbox_args(gate_dir, exchange, network):
             "--tmpfs", "/tmp", "--dir", "/etc", "--dir", "/bin", "--dir", "/usr/bin",
             "--symlink", "@shell@", "/bin/sh", "--symlink", "@env@", "/usr/bin/env",
             "--ro-bind", HERE / "passwd", "/etc/passwd", "--ro-bind", HERE / "group", "/etc/group",
-            "--ro-bind", "@dbusConf@", "/etc/dbus-1/session.conf",
             "--ro-bind", "@fonts@", "/etc/fonts/fonts.conf",
             "--ro-bind", "@cert@", "/etc/ssl/certs/ca-certificates.crt",
             "--perms", "0700", "--dir", "/run/workspace", "--ro-bind", gate_dir, "/run/gate",

@@ -57,11 +57,12 @@ stdenv.mkDerivation {
     dir="$out/libexec/weasel-workspace"
     mkdir -p "$dir" "$out/bin"
     cp *.py workspace-pointer sway.conf passwd group resolv.conf "$dir/"
-    substituteInPlace "$dir/broker.py" --replace-fail '@fastWtype@' '${fastWtype}/bin/wtype'
+    substituteInPlace "$dir/broker.py" \
+      --replace-fail '@fastWtype@' '${fastWtype}/bin/wtype' \
+      --replace-fail '@dbusConf@' '${dbus}/share/dbus-1/session.conf'
     substituteInPlace "$dir/sandbox.py" \
       --replace-fail '@bwrap@' '${bubblewrap}/bin/bwrap' \
       --replace-fail '@slirp@' '${slirp4netns}/bin/slirp4netns' \
-      --replace-fail '@dbusConf@' '${dbus}/share/dbus-1/session.conf' \
       --replace-fail '@cert@' '${cacert}/etc/ssl/certs/ca-bundle.crt' \
       --replace-fail '@shell@' '${bash}/bin/bash' \
       --replace-fail '@env@' '${coreutils}/bin/env' \
