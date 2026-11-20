@@ -79,7 +79,7 @@ with subtest("Crew menu opens the desktop application"):
     clients_seen["Crew"] = launch_menu_entry(
         "t3code-morrowbyte",
         "Crew",
-        ["crew", "t3 code", "t3code", "t3code-morrowbyte", "com.t3tools.t3code"],
+        ["com.morrowbyte.t3code"],
     )
 
 with subtest("Super+Space opens the action palette and Enter reads the window list"):
