@@ -90,3 +90,13 @@ Ein Skriptlauf zur Qualifikation wird getrennt von Modellläufen protokolliert.
 
 Die Logs und PNGs liegen nur im privaten Laufverzeichnis. Nach Übernahme der
 benötigten aggregierten Belege entfernt der Besitzer sein Laufverzeichnis.
+
+`python3 tests/agent-bench/trace.py /privater/pfad/zum/einzelnen-rollout.jsonl`
+wertet genau den zugeordneten Modelllauf aus. Es zählt verschiedene
+`token_usage_record.response_id` bis zur Rückkehr des unabhängigen Prüfergebnisses.
+Die Differenz zwischen Codex-Auftragsstart und Prüfrückkehr benutzt eine
+einzige Uhr. Parallele äußere Werkzeugaufrufe gehen als zeitliche Vereinigung
+ein. Die Restzeit enthält Modell und Harness. Die Zustellung vor dem
+Codex-Auftragsstart wird über die T3-Zeitstempel separat angegeben. Private
+Rollouts bleiben am Ursprungsort. Für einen abgebrochenen Lauf kann der
+Auswerter auf die ID der letzten belegten Toolantwort begrenzt werden.
