@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from actions import MAX_REPLY, MAX_REQUEST, MAX_SECONDS, identifier, validate_batch
 from exchange import OPERATIONS
 from presentation import open_window
-from sandbox import exchange_dir, spawn
+from sandbox import exchange_dir, profile_dir, spawn
 from workspace_client import BrokerError, Paths, exchange_request, locked, private_dir, runtime_base
 
 
@@ -94,23 +94,34 @@ def program(value):
 def start(paths, args):
     with locked(paths.directory):
         options = {"exchange": str(Path(args.exchange).absolute()) if args.exchange else None,
-                   "network": args.network}
+                   "network": args.network, "persistent": args.persistent}
         if paths.running():
-            actual = json.loads(paths.options.read_bytes())
-            if args.exchange and str(Path(args.exchange).resolve()) != actual["exchange"] or args.network and not actual["network"]:
+            actual = paths.start_options()
+            if args.persistent and not actual["persistent"]:
+                raise ValueError("already running with a temporary home; stop before changing profiles")
+            if (args.exchange and str(Path(args.exchange).resolve()) != actual["exchange"]
+                    or args.network and not actual["network"]):
                 raise ValueError("already running with different rights; stop before changing them")
             request = {"op": "status"}
             if args.exchange:
                 info = os.stat(args.exchange, follow_symlinks=False)
                 request["verify_exchange"] = [info.st_dev, info.st_ino]
+            if args.persistent:
+                with profile_dir(paths.name, create=False) as fd:
+                    info = os.fstat(fd)
+                    request["verify_profile"] = [info.st_dev, info.st_ino]
             status = rpc(paths, request)
+            if args.persistent and not status.pop("profile_verified", False):
+                raise ValueError("running broker cannot confirm profile identity")
             if args.exchange and not status.pop("exchange_verified", False):
                 raise ValueError("running broker cannot confirm exchange identity; stop before changing rights")
             return {**status, **actual}
-        with exchange_dir(options["exchange"]) as (path, fd):
+        profile = profile_dir(paths.name) if args.persistent else contextlib.nullcontext(None)
+        with profile as profile_fd, exchange_dir(options["exchange"]) as (path, fd):
             options["exchange"] = path
-            result = spawn(paths, options, fd, lambda: rpc(paths, {"op": "status"}, timeout=13))
-        save(paths.options, options)
+            save(paths.options, options)
+            result = spawn(paths, options, fd, lambda: rpc(paths, {"op": "status"}, timeout=13),
+                           profile_fd=profile_fd)
         return {**result, **options}
 
 
@@ -191,7 +202,7 @@ def execute(args):
         return stop(paths)
     if op == "status":
         with locked(paths.directory):
-            result = (rpc(paths, {"op": op}, timeout=4) | json.loads(paths.options.read_bytes())
+            result = (rpc(paths, {"op": op}, timeout=4) | paths.start_options()
                       if paths.running() else {"running": False})
             return {**result, "paused": json.loads((base / "gate/state").read_bytes())["paused"]}
     if not paths.running():
@@ -238,6 +249,7 @@ def main():
     start_cmd = commands.add_parser("start")
     start_cmd.add_argument("--exchange", metavar="DIR")
     start_cmd.add_argument("--network", action="store_true")
+    start_cmd.add_argument("--persistent", action="store_true", help="reuse this name's private home across sessions")
     for name in ("status", "view", "stop", "cancel-all", "resume"):
         commands.add_parser(name)
     for name in ("batch", "cancel"):

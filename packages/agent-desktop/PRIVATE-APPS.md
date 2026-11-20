@@ -1,11 +1,22 @@
 # Programme auf privaten Arbeitsflächen
 
 In `weasel palette` zuerst **Private Arbeitsfläche starten** wählen.
-Name, Austauschordner und Netzwerkzugang lassen sich separat einstellen.
+Name, Austauschordner, Netzwerkzugang und privates Home lassen sich separat einstellen.
 Eine neue Sitzung startet standardmäßig offline. Falls ein Austauschordner
 gewählt wurde, können die Programme der Sitzung unter `/exchange` darauf
 zugreifen. Die Anforderungen an den Host-Ordner und die Rechte beim erneuten
 Start sind im [Workspace-Handbuch](../agent-workspace/README.md) beschrieben.
+
+Für gespeicherte App-Einstellungen und Dokumente beim Start unter **Privates
+Home** die Option **Für diesen Namen dauerhaft speichern** wählen. Zum
+Weiterarbeiten nach Stopp oder Rechnerneustart denselben Namen und dieselbe
+Option wählen. In der CLI entspricht das
+`weasel run private_start '{"name":"bericht","persistent":true}'`.
+Ein MCP-Client sendet an `weasel mcp` nach der Initialisierung zum Beispiel
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"private_start","arguments":{"name":"bericht","persistent":true}}}
+```
 
 Danach **Programm auf privater Arbeitsfläche öffnen** wählen und denselben
 Arbeitsflächennamen eingeben. Unter **Ausführbares Programm** steht der

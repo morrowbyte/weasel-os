@@ -56,6 +56,10 @@ class Paths:
         self.live = self.directory / "live"
         self.options = self.directory / "options"
 
+    def start_options(self):
+        # Sessions launched before profile support have a temporary home.
+        return {"persistent": False, **json.loads(self.options.read_bytes())}
+
     def running(self):
         try:
             with self.live.open("rb") as f:

@@ -28,6 +28,7 @@ FIELD_LABELS = {
     "window_id": "Fenster", "workspace_id": "Arbeitsfläche", "label": "Feldbeschriftung",
     "expected_text": "Erwarteter Feldinhalt", "text": "Text", "app": "Programm",
     "name": "Name der privaten Arbeitsfläche", "exchange": "Austauschordner (optional)",
+    "persistent": "Privates Home",
     "network": "Netzwerkzugang", "program": "Ausführbares Programm", "argv": "Argumente als JSON-Liste (optional)",
     "wait_window": "Wayland-App-ID oder X11-Klasse des neuen Fensters", "key": "Taste oder Tastenkürzel",
     "x": "X-Koordinate", "y": "Y-Koordinate", "button": "Maustaste", "direction": "Scrollrichtung",
@@ -105,8 +106,10 @@ async def pick_args(spec):
         elif "enum" in field:
             choices = field["enum"]
             args[key] = choices[await prompt(label, [CHOICE_LABELS[value] for value in choices])]
-        elif field["type"] == "boolean":
+        elif key == "network":
             args[key] = bool(await prompt(label, ["Standard für neue Sitzung (offline)", "Netzwerkzugang anfordern"]))
+        elif key == "persistent":
+            args[key] = bool(await prompt(label, ["Flüchtig", "Für diesen Namen dauerhaft speichern"]))
         else:
             if field.get("default"):
                 label = f"{label} [{field['default']}]"
@@ -175,7 +178,8 @@ async def palette():
             session = row["result"]
             network = "Netzwerkzugang erlaubt" if session["network"] else "Offline"
             exchange = f"/exchange ↔ {session['exchange']}" if session["exchange"] else "Kein Austauschordner"
-            await show("Private Arbeitsfläche bereit", [network, exchange])
+            profile = "Dauerhaftes privates Home" if session["persistent"] else "Flüchtiges privates Home"
+            await show("Private Arbeitsfläche bereit", [profile, network, exchange])
         elif action == "private_open":
             window = row["result"]["window"]
             await show("Privates Fenster geöffnet", [f"{window.get('title') or window['app_id']} · Fenster {window['id']}"])

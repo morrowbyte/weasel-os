@@ -157,6 +157,11 @@ class Broker:
         op = request["op"]
         if op == "status":
             verified = {}
+            if "verify_profile" in request:
+                info = os.stat("/home/workspace")
+                if request["verify_profile"] != [info.st_dev, info.st_ino]:
+                    raise ValueError("profile identity changed; stop before changing profiles")
+                verified["profile_verified"] = True
             if "verify_exchange" in request:
                 if self.exchange_fd is None:
                     raise ValueError("workspace has no exchange grant")
@@ -164,7 +169,8 @@ class Broker:
                 if request["verify_exchange"] != [info.st_dev, info.st_ino]:
                     raise ValueError("exchange identity changed; stop before changing rights")
                 verified["exchange_verified"] = True
-            return {**verified, "running": True, "output": await outputs(), "windows": await windows(),
+            return {**verified, "running": True, "session": self.session,
+                    "output": await outputs(), "windows": await windows(),
                     "job": self.job_id, "view_open": self.view is not None,
                     "manual_input": bool(self.view and self.view.manual)}
         if op == "gate":

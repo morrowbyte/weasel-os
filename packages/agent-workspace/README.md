@@ -1,6 +1,6 @@
 # weasel-workspace
 
-Ein pro Benutzer benannter, flüchtiger Wayland-Desktop für Hintergrundaufträge.
+Ein pro Benutzer benannter Wayland-Desktop für Hintergrundaufträge mit optional dauerhaftem Home.
 Einbindung über `pkgs.callPackage ./packages/agent-workspace {}`. Der Host braucht
 Linux mit Benutzer-Namespaces, Bubblewrap und ein eigenes privates
 `XDG_RUNTIME_DIR`. Der Paket-Wrapper bringt die Laufzeitprogramme mit.
@@ -23,6 +23,47 @@ einer explizit geöffneten Shell interpretiert. Der zurückgegebene PID gehört
 zum privaten Namespace. `wait-window` wartet auf ein fokussiertes Fenster mit
 exakt passender Wayland-App-ID oder X11-Klasse (z. B. `XTerm`). `status` zeigt App-IDs, Titel, Fokus, Ausgabe,
 Rechte, laufenden Auftrag und die Eingabesperre.
+
+## Ein privates App-Profil wiederverwenden
+
+```sh
+weasel-workspace --name notizen start --persistent
+weasel-workspace --name notizen open -- mousepad --disable-server
+# In Mousepad unter /home/workspace/notiz.txt speichern.
+weasel-workspace --name notizen stop
+weasel-workspace --name notizen start --persistent
+weasel-workspace --name notizen open -- mousepad --disable-server /home/workspace/notiz.txt
+```
+
+Apps können Dokumente und Einstellungen wie gewohnt in ihrem privaten
+`$HOME` speichern. Das Home liegt auf dem Host unter
+`${XDG_DATA_HOME:-$HOME/.local/share}/weasel-workspace/profiles/<Name>`.
+Der Profilpfad muss aus echten Verzeichnissen bestehen. Die drei verwalteten
+Verzeichnisse ab `weasel-workspace` gehören dem Benutzer und haben Modus 0700.
+Bubblewrap bindet das geöffnete Profilverzeichnis ein und hält es für die
+gesamte Sitzung exklusiv belegt. Der Austauschordner bleibt separat.
+
+Nach `stop` oder einem Neustart des Rechners wählt `start --persistent`
+dasselbe Home wieder aus. Ein frischer Start ohne Schalter erhält ein leeres,
+flüchtiges Home. Ein erneuter Start einer *laufenden* Sitzung meldet deren
+tatsächlichen Modus in `persistent`. Eine laufende flüchtige Sitzung lässt
+sich erst nach `stop` auf dauerhaft umstellen. `cancel-all` sperrt weiterhin
+die Eingabe und lässt gespeicherte Dateien bestehen.
+
+Programme im selben benannten Profil können die darin gespeicherten Daten
+lesen, einschließlich dort bewusst angelegter App-Anmeldungen. Verwende
+getrennte Namen für getrennte Vertrauensbereiche. Für weitere Apps genügt
+derselbe Startvertrag. Nach jedem frischen Start entstehen ein eigener Bus,
+ein neuer Compositor und eine neue `session`-Kennung. Fenster-IDs gelten
+innerhalb dieser Sitzung. Ein Client identifiziert ein Fenster nach einem
+Neustart über das Paar aus `session` und Fenster-ID.
+
+Die eigenständige Gastprobe `tests/agent-first/persistent-profile.py` läuft
+als Desktop-Benutzer im Niri-Testgast mit einem fokussierten Operatorfenster.
+Sie speichert und öffnet ein Dokument in Mousepad und prüft die gespeicherten
+Bytes und den Niri-Fokusstrom. Für einen Reboottest zuerst
+`python3 persistent-profile.py --name profile-test-reboot --phase save`
+ausführen und nach dem Gastneustart denselben Aufruf mit `--phase reopen`.
 
 ## Dieselbe App am Desktop bedienen
 
@@ -50,7 +91,7 @@ zurückgewiesen.
 
 | Befehl | Wirkung |
 | --- | --- |
-| `start [--exchange DIR] [--network]` | Startet die Sitzung oder meldet die vorhandene Sitzung mit ihren tatsächlichen Rechten. Rechte werden beim Start festgelegt. |
+| `start [--persistent] [--exchange DIR] [--network]` | Startet die Sitzung oder meldet die vorhandene Sitzung mit ihrem Profilmodus und ihren tatsächlichen Rechten. |
 | `status` | Prüft den privaten Compositor und listet seine Fenster. |
 | `open -- PROGRAM [ARG ...]` | Startet das Programm im privaten Home. |
 | `view` | Öffnet eine interaktive Ansicht der laufenden Sitzung bis zum Schließen des Fensters. |

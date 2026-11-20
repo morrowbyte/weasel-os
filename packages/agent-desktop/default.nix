@@ -24,7 +24,7 @@ stdenvNoCC.mkDerivation {
     runHook preInstall
     install -Dm644 -t "$out/libexec/weasel" *.py
     ln -s ${workspace}/libexec/weasel-workspace "$out/libexec/agent-workspace"
-    install -Dm644 -t "$out/share/doc/weasel" README.md EXCHANGE.md
+    install -Dm644 -t "$out/share/doc/weasel" README.md EXCHANGE.md PRIVATE-APPS.md
     mkdir -p "$out/bin"
     makeWrapper ${python3}/bin/python3 "$out/bin/weasel" \
       --add-flags "-EsB $out/libexec/weasel/weasel.py" \

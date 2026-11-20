@@ -77,14 +77,25 @@ class Entry(unittest.IsolatedAsyncioTestCase):
                 {"paused": True}, {"paused": False},
             ]
             steps = [{"action": "private_start"},
-                     {"action": "private_start", "args": {"name": "report", "network": True, "exchange": "/tmp/A B"}},
+                     {"action": "private_start", "args": {"name": "report", "network": True,
+                                                          "exchange": "/tmp/A B", "persistent": True}},
                      {"action": "private_cancel_all"}, {"action": "private_resume"}]
             result, _ = await execute(steps)
             self.assertEqual(result["status"], "completed")
             self.assertEqual(broker.await_args_list, [
-                call("default", "start"), call("report", "start", "--exchange=/tmp/A B", "--network"),
+                call("default", "start"), call("report", "start", "--exchange=/tmp/A B", "--network", "--persistent"),
                 call("default", "cancel-all"), call("default", "resume"),
             ])
+
+    async def test_palette_profile_and_network_are_independent(self):
+        with patch("weasel.prompt", new_callable=AsyncMock) as prompt:
+            prompt.side_effect = ["bericht", "", 0, 1]
+            args = validate("private_start", await pick_args(CATALOG["private_start"]))
+            self.assertTrue(args["persistent"])
+            self.assertFalse(args["network"])
+            self.assertIn("dauerhaft", prompt.await_args_list[-1].args[1][1])
+        with self.assertRaisesRegex(ValueError, "persistent"):
+            validate("private_start", {"persistent": "true"})
 
     async def test_palette_reads_argv_as_json_and_uses_human_labels(self):
         with patch("weasel.prompt", new_callable=AsyncMock) as prompt:

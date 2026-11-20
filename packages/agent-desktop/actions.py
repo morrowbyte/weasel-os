@@ -114,6 +114,8 @@ async def private(action, args, images):
             options.append("--exchange=" + args["exchange"])
         if args["network"]:
             options.append("--network")
+        if args["persistent"]:
+            options.append("--persistent")
         return await workspace(name, "start", *options)
     if operation in ("stop", "status"):
         return await workspace(name, operation)
