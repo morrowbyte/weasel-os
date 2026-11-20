@@ -7,11 +7,12 @@ freier Werkzeugwahl mit den paketierten Dateiaktionen **19,425 s**. Auf
 demselben Driver v8 erreichte GPT-6.1 Terra / Priority das identische
 Dateiergebnis nach **16,562 s**. Auf Driver v10 schloss Sol die Aufgabe
 in **15,252 s** ab. Der warme Produktschritt zur Umbenennung dauerte
-**2,578 ms**. Die
-Bearbeitung des Liefertermins im offenen Mousepad-Dokument ist weiterhin
-offen. Auf dem Driver des GUI-Laufs speicherte GPT-6.1 Terra / Priority
-die Kopie unter dem richtigen Namen mit dem Text `Fridayy.`. In diesen
-Läufen blieben der Vordergrundentwurf und sein Fokus erhalten.
+**2,578 ms**.
+
+Auch der Dokumentauftrag ist gelungen. Auf Driver v11b änderte Sol
+den Liefertermin im offenen Mousepad-Dokument und speicherte eine bytegenaue
+Kopie. Vom Auftrag bis zum unabhängigen Urteil vergingen **66,564 s**.
+Original, Inventar, Vordergrundentwurf und Fokus blieben erhalten.
 
 ## Dokument bearbeiten und als Kopie speichern
 
@@ -81,6 +82,38 @@ Das Modell sollte sichtbare Abweichungen vor dem Abschluss selbst korrigieren.
 Ein erster Klick-Aufruf ohne `button` scheiterte an der Argumentprüfung. Die
 anschließenden Produktquittungen und wechselnden App-Bilder zeigten die
 Bearbeitung und die Speicherung.
+
+### Erster erfolgreicher visueller Dokumentlauf auf Driver v11b
+
+Sol Ultrafast (low) erhielt den unveränderten Dokumentauftrag und die
+gültigen Argumente der GUI-Werkzeuge. Als Modell-Eingabe dienten
+Mousepad-Bilder und privater Fensterstatus. Die Arbeitsfläche lief in
+einem frischen, exklusiven QEMU-Gast mit bereits geöffnetem Dokument.
+
+Das Modell klickte auf den Termin, markierte das Wort mit `Ctrl+Left`
+und `Ctrl+Shift+Right` und tippte `Friday`. Im selben Compose öffnete es
+den Speichern-unter-Dialog. Nach dessen Bildkontrolle trug es den neuen
+Dateinamen ein und bestätigte per Linksklick. Das letzte Mousepad-Bild
+zeigt den Satz `Delivery is due on Friday.` und die Referenz 4815.
+Vor dem Abschluss las Sol den Fenstertitel
+`/exchange/Handover-Friday.txt - Mousepad`.
+
+Die unabhängige Prüfung fand genau Original, Inventardatei und Zielkopie
+mit den erwarteten Bytes einschließlich Leerzeilen und Schlussumbruch der
+Kopie. Während der privaten GUI-Aktionen behielt der Vordergrundentwurf
+seinen Fokus und empfing `draftAB\n`. Es gab fünf Compose-Aufrufe,
+davon vier mit Bild, und einen separaten Prüfaufruf. Alle Produktaktionen
+wurden erfolgreich quittiert.
+
+| Versuch | Auftrag bis Urteil | Auftrag bis Modellantwort | Modellantworten / äußere Aufrufe bis Urteil | Zeit in äußeren Tools | Codex-Zeit außerhalb der Tools | Gast-CLI gesamt | Driver inkl. Prüfung |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| edit-gui-sol-v11 | 66,564 s | 68,500 s | 7 / 7 | 49,502 s | 16,010 s | 2.408 ms | 3.309 ms |
+
+Der Gast beobachtete den korrekten Dateibestand **42,195 s ab dem ersten
+Gastaufruf** und **586,424 ms ab Beginn des speichernden Compose**. Dies war
+der fünfte eigenständige Dokumentversuch über mehrere Entwicklungsstände
+und der erste auf v11b. Der frühere v7-Lauf mit `Fridayy.` bleibt
+als fehlgeschlagener Versuch erfasst.
 
 ## Datei im offenen GTK-Dateidialog umbenennen
 
