@@ -51,16 +51,21 @@ with subtest("Codex CLI menu opens a new foot running the shipped Codex executab
     foot_pid = int(codex_window["pid"])
     # foot's default app_id is shared by terminals. Bind this specific seat
     # window to its child and to the executable delivered by the CLI package.
-    machine.wait_until_succeeds(
-        operator(
-            'codex=$(readlink -f "$(command -v codex)"); '
-            'pkg=$(dirname "$(dirname "$codex")"); '
+    package = PurePosixPath(machine.succeed("readlink -f /run/current-system/sw/bin/codex").strip()).parents[1]
+    try:
+        # The independent guest oracle may inspect the executable of non-dumpable
+        # child processes. Neither the client nor the desktop actor gets this access.
+        machine.wait_until_succeeds(
             f"for child in $(pgrep -P {foot_pid}); do "
-            'exe=$(readlink -f "/proc/$child/exe") || continue; '
-            'case "$exe" in "$pkg"/*codex*) echo "$exe"; exit 0;; esac; done; exit 1'
-        ),
-        timeout=20,
-    )
+            'exe=$(readlink "/proc/$child/exe") || continue; '
+            f'case "$exe" in {package}/bin/.codex-wrapped|{package}/bin/codex) '
+            'echo "$exe"; exit 0;; esac; done; exit 1',
+            timeout=20,
+        )
+    except Exception:
+        machine.log(machine.succeed("ps -e -o pid,ppid,user,comm | tail -140"))
+        machine.screenshot("codex-process-check")
+        raise
     clients_seen["Codex CLI"] = codex_window
 
 with subtest("ChatGPT menu opens the desktop application"):
