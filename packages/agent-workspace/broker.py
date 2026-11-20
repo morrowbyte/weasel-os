@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import socket
+import struct
 import sys
 import uuid
 from pathlib import Path
@@ -16,6 +17,9 @@ from actions import MAX_REQUEST, MAX_SECONDS, chord, identifier, validate_batch
 HERE = Path(__file__).resolve().parent
 RUNTIME = Path("/run/workspace")
 FAST_WTYPE = "@fastWtype@"
+IPC_HEADER = struct.Struct("=6sII")
+GET_OUTPUTS = 3
+GET_TREE = 4
 
 
 async def run(*args, data=None):
@@ -35,8 +39,26 @@ async def run(*args, data=None):
     return out
 
 
+async def sway_query(kind):
+    # One read-only i3 IPC request to the private compositor. A fresh connection
+    # per query keeps cancellation and simultaneous status calls independent.
+    async with asyncio.timeout(3):
+        reader, writer = await asyncio.open_unix_connection(os.environ["SWAYSOCK"])
+        try:
+            writer.write(IPC_HEADER.pack(b"i3-ipc", 0, kind))
+            await writer.drain()
+            header = await reader.readexactly(IPC_HEADER.size)
+            magic, length, reply_kind = IPC_HEADER.unpack(header)
+            if magic != b"i3-ipc" or reply_kind != kind or not 0 < length <= 8 << 20:
+                raise RuntimeError("invalid private Sway IPC reply")
+            return json.loads(await reader.readexactly(length))
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+
 async def outputs():
-    result = json.loads(await run("swaymsg", "-r", "-t", "get_outputs"))
+    result = await sway_query(GET_OUTPUTS)
     active = [o for o in result if o["active"]]
     if len(active) != 1 or active[0]["name"] != "HEADLESS-1":
         raise RuntimeError("expected exactly one active HEADLESS-1")
@@ -47,7 +69,7 @@ async def outputs():
 
 
 async def windows():
-    tree = json.loads(await run("swaymsg", "-r", "-t", "get_tree"))
+    tree = await sway_query(GET_TREE)
     result = []
 
     def visit(node):
