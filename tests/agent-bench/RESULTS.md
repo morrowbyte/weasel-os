@@ -12,7 +12,9 @@ in **15,252 s** ab. Der warme Produktschritt zur Umbenennung dauerte
 Auch der Dokumentauftrag ist gelungen. Auf Driver v11b änderte Sol
 den Liefertermin im offenen Mousepad-Dokument und speicherte eine bytegenaue
 Kopie. Vom Auftrag bis zum unabhängigen Urteil vergingen **66,564 s**.
-Original, Inventar, Vordergrundentwurf und Fokus blieben erhalten.
+Auf Driver v14 wählte dasselbe Modell die private Zwischenablage für den
+Text und den Dateinamen. Das unabhängige Urteil lag nach **61,571 s** vor.
+Original, Inventar, Vordergrundentwurf und Fokus blieben in beiden Läufen erhalten.
 
 ## Dokument bearbeiten und als Kopie speichern
 
@@ -114,6 +116,38 @@ Gastaufruf** und **586,424 ms ab Beginn des speichernden Compose**. Dies war
 der fünfte eigenständige Dokumentversuch über mehrere Entwicklungsstände
 und der erste auf v11b. Der frühere v7-Lauf mit `Fridayy.` bleibt
 als fehlgeschlagener Versuch erfasst.
+
+### Dokumentlauf mit privater Zwischenablage auf Driver v14
+
+Sol Ultrafast (low) erhielt denselben Auftrag im frischen, exklusiven Gast
+mit geöffnetem Mousepad. Es konnte die beiden privaten Clipboard-Aktionen
+zusätzlich zu den bisherigen GUI-Werkzeugen wählen. Beim ersten Versuch,
+die Auswahl mit `Ctrl+c` und `private_clipboard_read` zu kontrollieren,
+meldete Schritt 7 `private clipboard selection unavailable`. Das nächste
+Bild zeigte eine Markierung in der Überschrift, während im Liefertermin
+noch `Monday` stand. Der Leseschritt lieferte keinen Text. Die Ursache für
+die fehlende Zwischenablageauswahl bleibt offen.
+
+Sol setzte die Auswahl neu, schrieb `Friday` in die private Zwischenablage
+und fügte den Text per `Ctrl+v` ein. Über denselben Weg trug es
+`Handover-Friday.txt` in den Speicherdialog ein. Die Schreibbelege
+bestätigten 6 und 19 Bytes. Vor `finish` zeigte das letzte Mousepad-Bild
+`Delivery is due on Friday.` und die Referenz 4815. Der Fensterstatus
+bestätigte den Pfad `/exchange/Handover-Friday.txt`. Die unabhängige
+Prüfung bestätigte dieselben drei Datei-Hashes wie auf v11b, die Eingabe
+`draftAB\n` und den durchgehenden Fokus auf dem Vordergrundentwurf.
+
+| Dokumentauftrag, je ein Versuch | Auftrag bis Urteil | Auftrag bis Modellantwort | Modellrunden / äußere Aufrufe bis Urteil | Compose / Bilder | Zeit in äußeren Tools | Codex-Zeit außerhalb der Tools | Gast-CLI gesamt | Driver inkl. Prüfung |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Visuell, v11b | 66,564 s | 68,500 s | 7 / 7 | 5 / 4 | 49,502 s | 16,010 s | 2.408 ms | 3.309 ms |
+| Mit privater Zwischenablage, v14 | 61,571 s | 63,284 s | 9 / 9 | 7 / 6 | 46,392 s | 14,210 s | 4.464 ms | 5.883 ms |
+
+Auf v14 beobachtete der Gast den bytegenauen Dateibestand **41,002 s ab
+dem ersten Gastaufruf** und **957,419 ms ab dem speichernden Compose**.
+Das unabhängige Urteil kam in diesem Versuchspaar 4,993 s früher an.
+Sol brauchte dafür zwei zusätzliche Modellrunden. Der Leseversuch, die
+unterschiedlichen Driverstände und die Einzelstichproben begrenzen die
+Aussage zur Geschwindigkeit der Zwischenablage.
 
 ## Datei im offenen GTK-Dateidialog umbenennen
 
