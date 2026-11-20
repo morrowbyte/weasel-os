@@ -117,8 +117,8 @@ def verify_viewer_pointer() -> None:
         gw, gh, gx, gy = glyphs
         # Before the eleventh M. A wrong x changes the split; a wrong y changes the line.
         x, y = round(gx + gw / 3), round(gy + gh / 2)
-        gutter = round(layout["tile_pos_in_workspace_view"][1] + layout["window_offset_in_tile"][1]
-                       + layout["window_size"][1] - 40)
+        page_bottom = page[3] + page[1]
+        gutter = (page_bottom + height) // 2
         assert page[3] + page[1] + 60 < gutter < height, (page, gutter)
         assert (press_count("viewer.wl"), press_count("editor.wl")) == (0, 0)
         click(x, y, width, height)
