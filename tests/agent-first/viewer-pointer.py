@@ -104,8 +104,16 @@ def verify_viewer_pointer() -> None:
             time.sleep(0.12)
         width, height = map(int, subprocess.check_output(
             ["magick", "identify", "-format", "%w %h", str(shot)], text=True).split())
-        logical = json.loads(run("niri", "msg", "--json", "focused-output"))["logical"]
-        assert (logical["width"], logical["height"], logical["scale"]) == (width, height, 1)
+        outputs = json.loads(run("niri", "msg", "--json", "outputs"))
+        assert len(outputs) == 1, outputs
+        output, = outputs.values()
+        assert not empty["output"] or empty["output"] in outputs, (empty, outputs)
+        # The nested backend can omit focused-output. Both QEMU tablet axes
+        # address the single captured scanout, including its letterbox margins.
+        assert (width, height) == (1280, 800), (width, height)
+        if output.get("logical"):
+            logical = output["logical"]
+            assert (logical["width"], logical["height"], logical["scale"]) == (width, height, 1)
         gw, gh, gx, gy = glyphs
         # Before the eleventh M. A wrong x changes the split; a wrong y changes the line.
         x, y = round(gx + gw / 3), round(gy + gh / 2)
