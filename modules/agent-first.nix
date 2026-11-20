@@ -46,6 +46,9 @@ in
     indicator
     desktop
     workspace
+    pkgs.git
+    pkgs.jq
+    pkgs.ripgrep
     pkgs.foot
     pkgs.fuzzel
     pkgs.mousepad
