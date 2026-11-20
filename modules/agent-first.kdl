@@ -29,6 +29,11 @@ binds {
     Super+Shift+Page_Down { move-column-to-workspace-down; }
     Super+Shift+Left { move-column-left; }
     Super+Shift+Right { move-column-right; }
+    Super+BracketLeft { consume-or-expel-window-left; }
+    Super+BracketRight { consume-or-expel-window-right; }
+    Super+R { switch-preset-column-width; }
+    Super+Shift+V { toggle-window-floating; }
+    Super+V { switch-focus-between-floating-and-tiling; }
     Super+W { close-window; }
     Super+F { maximize-column; }
     Super+Shift+F { fullscreen-window; }
