@@ -32,6 +32,8 @@ weasel catalog
 weasel run windows
 ```
 
+Für eine App, in der du und der Agent abwechselnd arbeiten, drücke **Super+Umschalt+D** und tippe den App-Namen. Das neue Fenster zeigt die private Sitzung. Sobald du zu einem anderen Fenster wechselst, kann der Agent mit ihrer angezeigten Sitzungskennung weiterarbeiten. Mit derselben Tastenkombination findest du die laufende Sitzung wieder.
+
 Ein Agent erreicht die gemeinsamen Aktionen über den lokalen MCP-Server `weasel_os`. Für fenstergebundene Beobachtungen und die direkte Steuerung steht `weasel_desktop` bereit. Beide sind in der Systemvorgabe unter `/etc/codex/config.toml` eingetragen. Maßgeblich für die Bedienung ist das lokale Backend in der laufenden Sitzung. Eine Cloud-Sitzung oder ein entfernter Crew-Provider läuft auf einem anderen Rechner.
 
 ## Im Hintergrund ein Dokument bearbeiten
@@ -66,6 +68,6 @@ Ein neues Austauschverzeichnis beginnt leer. Programme mit Netzzugriff benötige
 nix build -L --no-write-lock-file .#checks.x86_64-linux.agent-first-desktop
 ```
 
-Der Test bootet einen Wegwerfgast, erfasst Niris Fokusereignisse und prüft ein gespeichertes Mousepad-Dokument sowie den gleichzeitig eingegebenen Vordergrundtext. Weitere Prüfungen betreffen das bereits geöffnete Fenster, seine Pixel, die Zwischenablage, die Tastaturpalette und die drei Clientfenster. Die Modellbenchmarks verwenden einen eigenen frischen Gast pro Versuch. [Aufgaben und Messverfahren](../../tests/agent-bench/README.md)
+Der Test bootet einen Wegwerfgast, erfasst Niris Fokusereignisse und prüft ein gespeichertes Mousepad-Dokument sowie den gleichzeitig eingegebenen Vordergrundtext. Weitere Prüfungen betreffen das bereits geöffnete Fenster, seine Pixel, die Zwischenablage, die Tastaturpalette und die drei Clientfenster. Die Modellbenchmarks verwenden einen eigenen frischen Gast pro Versuch. [Aufgaben und Messverfahren](../../tests/agent-bench/README.md) · [Ergebnisse und Fehlversuche](../../tests/agent-bench/RESULTS.md)
 
 [Gemeinsamer Katalog](../../packages/agent-desktop/README.md) · [Private Anwendungen](../../packages/agent-desktop/PRIVATE-APPS.md) · [Workspace-Befehle und Datenübergabe](../../packages/agent-workspace/README.md) · [Unterstützte Clientpakete](../../packages/agent-clients/README.md)
