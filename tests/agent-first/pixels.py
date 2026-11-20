@@ -38,7 +38,7 @@ with subtest("Read the inactive window's own pixels while the user's clipboard a
     ))
     # Lossless sRGB sample halfway across the ANSI true-color terminal.
     rgb = machine.succeed(operator(
-        """magick "$HOME/window.png" -crop 1x1+%[fx:floor(w/2)]+%[fx:floor(h/2)] -depth 8 rgb:- | od -An -tu1"""
+        """magick "$HOME/window.png" -gravity center -crop 1x1+0+0 +repage -depth 8 rgb:- | od -An -tu1"""
     )).split()
     assert rgb == ["17", "85", "153"], rgb
     code, output = machine.execute(operator(shlex.join([*request, json.dumps({"window_id": protected_id})])))

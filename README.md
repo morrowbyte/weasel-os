@@ -4,6 +4,8 @@ WeaselOS is my personal NixOS flake for `nixy-laptop` and `nixy-desktop`.
 The flake is composed through `flake-parts`, with host data flowing into reusable modules instead of per-host handwritten wiring.
 The current desktop stack is Niri plus Dank Material Shell (DMS), with shared system and Home Manager profiles layered underneath the host directories.
 
+The `weasel-agent` development VM boots an independent Niri session with a keyboard action palette, local MCP servers and private desktops for background work. [Build and run the VM](hosts/weasel-agent/README.md).
+
 This repo is optimized for three workflows:
 
 1. Rebuild my own laptop and desktop without host drift.

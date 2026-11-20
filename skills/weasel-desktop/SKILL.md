@@ -11,4 +11,4 @@ For a visual task that can open its own app instance, use a named private worksp
 
 Compose independent or stable actions using `weasel compose --request-id ID`. Inspect intermediate state before acting on a newly opened window or dialog. Read step receipts and resulting content after cancellation, partial effects or lost transport. Alt+Escape stops agent input. Resume private input only for a new authorized continuation.
 
-Foreground control uses the installed `weasel_desktop` actor. Obtain fresh observations, bind physical actions to their task and use the packaged indicator. Supply an explicit target and verify changed application state. Keep personal credentials in their existing stores.
+Foreground control uses the installed `weasel_desktop` actor. After login or an explicit takeover the desktop owner can press Super+Shift+A to allow new desktop actions. Respect the current stop and session. Obtain fresh observations, bind physical actions to their task and use the packaged indicator. Supply an explicit target and verify changed application state. Keep personal credentials in their existing stores.

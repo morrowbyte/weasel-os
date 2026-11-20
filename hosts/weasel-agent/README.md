@@ -7,8 +7,7 @@ Der x86_64-Linux-Gast startet einen Niri-Desktop mit Codex CLI, ChatGPT Desktop 
 Im ausgecheckten weasel-os-Repository auf einem grafischen x86_64-Linux-Rechner mit Nix, Flakes und KVM:
 
 ```sh
-nix build --no-write-lock-file .#nixosConfigurations.weasel-agent.config.system.build.vm
-./result/bin/run-weasel-agent-vm
+nix run --no-write-lock-file .#weasel-agent
 ```
 
 Die QEMU-VM verwendet eine virtuelle Grafikausgabe. Weston stellt dafür einen Monitor mit Software-Rendering bereit, Niri verwaltet die Benutzerfenster. Für einen eigenen NixOS-Rechner lässt sich das exportierte Modul `nixosModules.agent-first` mit dessen vorhandener Hardware-, Benutzer- und Anmeldekonfiguration kombinieren.
@@ -42,7 +41,8 @@ Für eine neue Aufgabe kann eine private Sitzung beliebige installierte native W
 
 ```sh
 weasel-workspace --name bericht start --exchange "$HOME/bericht-austausch"
-weasel-workspace --name bericht open -- mousepad /exchange/notiz.txt
+touch "$HOME/bericht-austausch/notiz.txt"
+weasel run private_open '{"name":"bericht","program":"mousepad","argv":["--disable-server","/exchange/notiz.txt"],"wait_window":"org.xfce.mousepad"}'
 weasel-workspace --name bericht status
 ```
 
@@ -63,6 +63,6 @@ Ein neues Austauschverzeichnis beginnt leer. Programme mit Netzzugriff benötige
 nix build -L --no-write-lock-file .#checks.x86_64-linux.agent-first-desktop
 ```
 
-Der Test bootet einen Wegwerfgast, erfasst Niris Fokusereignisse und prüft ein gespeichertes Mousepad-Dokument sowie den gleichzeitig eingegebenen Vordergrundtext. Er prüft die getrennte Sitzung und den AT-SPI-Pfad eines vorhandenen Fensters. Die Ausgaben der einzelnen Client-Backends werden zusätzlich im Aktionspaket geprüft.
+Der Test bootet einen Wegwerfgast, erfasst Niris Fokusereignisse und prüft ein gespeichertes Mousepad-Dokument sowie den gleichzeitig eingegebenen Vordergrundtext. Weitere Prüfungen betreffen das bereits geöffnete Fenster, seine Pixel, die Zwischenablage, die Tastaturpalette und die drei Clientfenster. Die Modellbenchmarks verwenden einen eigenen frischen Gast pro Versuch. [Aufgaben und Messverfahren](../../tests/agent-bench/README.md)
 
 [Gemeinsamer Katalog](../../packages/agent-desktop/README.md) · [Private Anwendungen](../../packages/agent-desktop/PRIVATE-APPS.md) · [Workspace-Befehle und Datenübergabe](../../packages/agent-workspace/README.md) · [Unterstützte Clientpakete](../../packages/agent-clients/README.md)
