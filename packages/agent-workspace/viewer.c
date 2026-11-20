@@ -89,7 +89,13 @@ int main(int argc, char **argv)
     }
     view.window = GTK_WINDOW(gtk_window_new(GTK_WINDOW_TOPLEVEL));
     view.display = VNC_DISPLAY(vnc_display_new());
-    gtk_window_set_default_size(view.window, 960, 540);
+    const int output_width = 1280, output_height = 720;
+    gtk_window_set_default_size(view.window, output_width, output_height);
+    /* Keep the letterbox outside the input widget. GtkVnc then draws and
+     * translates pointer coordinates in the same framebuffer-shaped area. */
+    GtkWidget *frame = gtk_aspect_frame_new(NULL, 0.5f, 0.5f,
+        (gfloat)output_width / output_height, FALSE);
+    gtk_frame_set_shadow_type(GTK_FRAME(frame), GTK_SHADOW_NONE);
     title(&view, "Verbinden");
     vnc_display_set_read_only(view.display, TRUE);
     vnc_display_set_pointer_grab(view.display, FALSE);
@@ -97,7 +103,8 @@ int main(int argc, char **argv)
     vnc_display_set_force_size(view.display, FALSE);
     vnc_display_set_scaling(view.display, TRUE);
     vnc_display_set_allow_resize(view.display, FALSE);
-    gtk_container_add(GTK_CONTAINER(view.window), GTK_WIDGET(view.display));
+    gtk_container_add(GTK_CONTAINER(frame), GTK_WIDGET(view.display));
+    gtk_container_add(GTK_CONTAINER(view.window), frame);
 
     /* GtkVnc only emits server-cut-text. There is deliberately no clipboard
      * handler in either direction, and no host input injection backend. */

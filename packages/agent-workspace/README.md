@@ -29,7 +29,9 @@ Rechte, laufenden Auftrag und die Eingabesperre.
 Mit `weasel-workspace --name bericht view` öffnest du die laufende private
 Arbeitsfläche als normales Wayland-Fenster auf deinem Desktop. Du siehst
 den gesamten privaten Sway-Ausgang und bedienst seine Apps mit Maus und
-Tastatur. Das Fenster trägt den Sitzungsnamen im Titel. **Manuelle Eingabe**
+Tastatur. Bei Größenänderungen bleibt das 16:9-Bild proportional. Freie
+Ränder gehören zur Ansicht und senden keine Klicks an die App. Das Fenster
+trägt den Sitzungsnamen im Titel. **Manuelle Eingabe**
 zeigt an, dass der Broker die Bedienung freigegeben hat. Solange du dort
 arbeitest, weist er neue Agenteneingaben in dieser Sitzung zurück.
 
