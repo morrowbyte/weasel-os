@@ -118,7 +118,7 @@ class PrivateTransport(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(focus.await_count, 2)
             self.assertEqual(geometry.await_count, 2)
             self.assertEqual([c.args for c in run.await_args_list], [
-                (broker.FAST_WTYPE, "-k", "Home"),
+                (broker.HERE / "workspace-keyboard", "Home"),
                 (broker.HERE / "workspace-pointer", "click", "7", "12", "left"),
                 (broker.HERE / "workspace-pointer", "scroll", "8", "13", "down", "2")])
             with self.assertRaisesRegex(ValueError, "verbraucht"):
@@ -183,7 +183,7 @@ class PrivateTransport(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result["status"], "completed")
                 self.assertEqual(run.await_args_list[-2].args, (binary, "-"))
                 self.assertEqual(run.await_args_list[-2].kwargs["data"], "Grüße!".encode())
-                self.assertEqual(run.await_args_list[-1].args, (binary, "-M", "ctrl", "-k", "Home"))
+                self.assertEqual(run.await_args_list[-1].args, (broker.HERE / "workspace-keyboard", "Home", "ctrl"))
             run.side_effect = lambda *args, **kwargs: state.update(paused=True)
             result, _ = await compose.execute([key("a"), key("b"), key("c")])
             self.assertEqual((result["status"], result["remaining"]), ("partial", 1))

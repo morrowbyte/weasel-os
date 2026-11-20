@@ -62,6 +62,8 @@ stdenv.mkDerivation {
     dir="$out/libexec/weasel-workspace"
     mkdir -p "$dir" "$out/bin"
     cp *.py workspace-pointer workspace-keyboard sway.conf passwd group resolv.conf "$dir/"
+    substituteInPlace "$dir/actions.py" \
+      --replace-fail '/run/current-system/sw/lib/libxkbcommon.so.0' '${lib.getLib libxkbcommon}/lib/libxkbcommon.so.0'
     substituteInPlace "$dir/broker.py" \
       --replace-fail '@fastWtype@' '${fastWtype}/bin/wtype' \
       --replace-fail '@dbusConf@' '${dbus}/share/dbus-1/session.conf'

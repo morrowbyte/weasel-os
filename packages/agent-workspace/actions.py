@@ -1,9 +1,19 @@
 """Validate the whole operation before the first input reaches the compositor."""
+import ctypes
 import re
-from pathlib import PurePosixPath
+from functools import cache
+from pathlib import Path, PurePosixPath
 
 NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}")
 MODIFIERS = {"ctrl", "shift", "alt", "logo", "altgr"}
+KEY_ALIASES = {
+    "enter": "Return", "esc": "Escape", "ins": "Insert", "del": "Delete",
+    "pgup": "Page_Up", "pageup": "Page_Up",
+    "pgdn": "Page_Down", "pgdown": "Page_Down", "pagedown": "Page_Down",
+    "bksp": "BackSpace", "bs": "BackSpace", "spacebar": "space",
+    "arrowup": "Up", "arrowdown": "Down", "arrowleft": "Left", "arrowright": "Right",
+    "numpadenter": "KP_Enter", "kpenter": "KP_Enter",
+}
 MAX_REQUEST = 65536
 MAX_REPLY = 8 * 1024 * 1024
 MAX_SECONDS = 30
@@ -24,13 +34,23 @@ def integer(value, low, high):
     return value
 
 
+@cache
+def keysym_lookup():
+    # The package substitutes the same libxkbcommon used by workspace-keyboard.
+    library = Path("/run/current-system/sw/lib/libxkbcommon.so.0")
+    lookup = ctypes.CDLL(str(library) if library.is_file() else library.name).xkb_keysym_from_name
+    lookup.argtypes = (ctypes.c_char_p, ctypes.c_int)
+    lookup.restype = ctypes.c_uint32
+    return lookup
+
+
 def chord(value):
     parts = value.split("+")
     modifiers, key = [item.lower() for item in parts[:-1]], parts[-1]
     if (len(modifiers) != len(set(modifiers)) or set(modifiers) - MODIFIERS
             or not re.fullmatch(r"[A-Za-z0-9_]{1,64}", key)):
         raise ValueError("expected [Ctrl+][Shift+][Alt+][Logo+][AltGr+]XKB_KEY")
-    return [key, *modifiers]
+    return [KEY_ALIASES.get(key.lower(), key), *modifiers]
 
 
 def validate(action):
@@ -47,8 +67,11 @@ def validate(action):
         if len(args[0].encode()) <= (8192 if name == "text" else 255):
             return action
     if name == "key" and len(args) == 1 and isinstance(args[0], str):
-        chord(args[0])
-        return action
+        key, *modifiers = chord(args[0])
+        # XKB_KEYSYM_CASE_INSENSITIVE matches workspace-keyboard's lookup.
+        if not keysym_lookup()(key.encode("ascii"), 1):
+            raise ValueError(f"unknown XKB keysym {key!r}")
+        return ["key", "+".join([*modifiers, key])]
     if name in ("click", "scroll") and 2 <= len(args) <= 4:
         x, y = integer(args[0], 0, 1279), integer(args[1], 0, 719)
         if name == "click" and len(args) <= 3:

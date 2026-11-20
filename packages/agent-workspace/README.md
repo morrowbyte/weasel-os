@@ -57,6 +57,11 @@ die auf der Karte weder direkt noch mit Shift erreichbar sind, trägt der
 Helfer das gewünschte Symbol für diesen Aufruf auf F24 ein. `text` sendet
 Unicode weiterhin über wtype.
 
+Gängige Schreibweisen wie `Enter`, `Esc`, `PgUp`, `PgDn`, `Ins`, `Del`,
+`Bksp`, `Spacebar` und `ArrowLeft` sind auch in Großbuchstaben und mit
+Modifikatoren gültig. Ein unbekannter Tastenname verwirft die gesamte
+Aktionsfolge vor der ersten Eingabe.
+
 ## Einmalaufträge und Abbruch
 
 ```sh
