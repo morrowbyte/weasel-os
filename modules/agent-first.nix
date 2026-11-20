@@ -69,6 +69,12 @@ in
     mcp_servers.weasel_os = {
       command = "${desktop}/bin/weasel";
       args = [ "mcp" ];
+      # Codex filters the environment of stdio MCP children. Both entry points
+      # must address the same user's broker and persistent workspace profiles.
+      env_vars = [
+        "XDG_RUNTIME_DIR"
+        "XDG_DATA_HOME"
+      ];
     };
     mcp_servers.weasel_desktop = {
       command = "${actor}/bin/weasel-computer-use";

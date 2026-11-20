@@ -89,6 +89,7 @@ Den absoluten Pfad des installierten Pakets verwenden. Bei Installation im Syste
 [mcp_servers.weasel_os]
 command = "/run/current-system/sw/bin/weasel"
 args = ["mcp"]
+env_vars = ["XDG_RUNTIME_DIR", "XDG_DATA_HOME"]
 
 [mcp_servers.weasel_desktop]
 command = "/run/current-system/sw/bin/weasel"
@@ -97,7 +98,7 @@ args = ["desktop-mcp"]
 
 Ein bestehender `weasel_desktop`-Eintrag für `weasel-computer-use mcp` kann direkt weiterverwendet werden. `weasel desktop-mcp` startet exakt diesen nativen Dienst als stdio-Proxy. Dort stehen die originalen Werkzeuge für Beobachtung, Bilder, Aktionen, Abbruch und Wiederaufnahme zur Verfügung. `weasel_os` stellt zusätzlich die Palette-Aktionen einzeln und das Tool `compose` bereit. Dessen `steps` entsprechen dem CLI-Array.
 
-- **Codex CLI** liest den TOML-Eintrag aus dem aktiven Codex Home. Alternativ registriert `codex mcp add weasel_os -- /run/current-system/sw/bin/weasel mcp` den Einstieg. Eine frische Sitzung lädt die Konfiguration.
+- **Codex CLI** liest die TOML-Konfiguration beim Start. Der Agent-Gast liefert sie unter `/etc/codex/config.toml` aus. Bei manueller Einrichtung im eigenen Codex Home übernimmt `env_vars` die Sitzungs- und Datenverzeichnisse des Benutzers für den Workspace-Broker.
 - **Crew/Morrowbyte** verwendet beim Codex-Provider ein konfigurierbares Codex-Binary und dessen `homePath` als `CODEX_HOME`. Den Eintrag im Home der tatsächlich ausgewählten Providerinstanz auf der Zielmaschine setzen. Der Adapter startet den Codex-App-Server und liest sein MCP-Inventar. Ein anderer Provider, ein anderer Host oder ein isoliertes Voice-Profil hat eine eigene Werkzeugauswahl.
 - **ChatGPT Desktop für Linux** bringt im RPM ein eigenes `lib/chatgpt/resources/codex` mit. Der lokale Work-/Codex-Kontext benötigt den Eintrag in seinem aktiven Codex Home. Die hier geprüfte Schnittstelle ist das lokale Backend. Nutzung im normalen Web-Chat, ein Remote-Connector und der sichtbare Aufruf aus der Desktop-Oberfläche sind durch diesen Test nicht belegt. [Offizielle MCP-Konfiguration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)
 
