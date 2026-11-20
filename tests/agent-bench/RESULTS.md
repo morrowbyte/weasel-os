@@ -3,10 +3,12 @@
 Stand 20. November 2026. GPT-6.2 Sol / Ultrafast hat dieselbe Rechnung in
 zwei frischen Gästen erfolgreich umbenannt. Vom Modellauftrag bis zur
 unabhängigen Bestätigung vergingen im GTK-Dateidialog **65,274 s** und bei
-freier Werkzeugwahl mit den paketierten Dateiaktionen **19,425 s**. Die
+freier Werkzeugwahl mit den paketierten Dateiaktionen **19,425 s**. Auf
+demselben Driver v8 erreichte GPT-6.1 Terra / Priority das identische
+Dateiergebnis nach **16,562 s**. Die
 Bearbeitung des Liefertermins im offenen Mousepad-Dokument ist weiterhin
 offen. Auf dem Driver des GUI-Laufs speicherte GPT-6.1 Terra / Priority
-die Kopie unter dem richtigen Namen mit dem Text `Fridayy.`. In allen drei
+die Kopie unter dem richtigen Namen mit dem Text `Fridayy.`. In diesen
 Läufen blieben der Vordergrundentwurf und sein Fokus erhalten.
 
 ## Dokument bearbeiten und als Kopie speichern
@@ -180,3 +182,33 @@ Testdaten, Prüfer und Einzelgastbetrieb stimmen überein. Driver v8 enthält
 die zusätzlich verfügbaren Produktaktionen, der Vergleichslauf im Dialog
 lief auf v7. Die Stichproben erlauben keine allgemeine Erfolgsquote oder
 isolierte Schätzung des Effekts einzelner Werkzeug- oder Driveränderungen.
+
+### Gleicher Auftrag und Driver mit Terra Priority und Sol Ultrafast
+
+Beide Modelle erhielten denselben Auftrag und dasselbe Angebot an
+GUI- und Dateiwerkzeugen. Jeder Lauf begann mit einem frisch gestarteten
+Gast auf Driver v8, bereits geöffnetem GTK-Speicherdialog und exklusiver
+QEMU-Nutzung. Beide Modelle erreichten im ersten Versuch genau die beiden
+erwarteten Dateien mit unveränderten Bytes. Der Entwurf enthielt
+`draftAB\n` und behielt den Niri-Fokus.
+
+| Modell / Tier (je ein Lauf, low) | Auftrag bis Urteil | Auftrag bis Modellantwort | Modellantworten / äußere Aufrufe bis Urteil | Zeit in äußeren Tools | Codex-Zeit außerhalb der Tools | Gast-CLI gesamt | Driver inkl. Prüfung |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| GPT-6.1 Terra / Priority | 16,562 s | 17,782 s | 2 / 2 | 7,133 s | 8,780 s | 1.333 ms | 1.856 ms |
+| GPT-6.2 Sol / Ultrafast | 19,425 s | 20,810 s | 3 / 3 | 12,439 s | 6,315 s | 4.747 ms | 6.669 ms |
+
+Terra listete zuerst den Ordner und fragte den privaten Fensterstatus ab.
+Im zweiten Compose bündelte Terra Umbenennung, erneutes Auflisten und
+Fensterstatus. Der Modelltrace zeigt, dass Terra den unabhängigen Abschluss
+im selben Shellaufruf unbedingt anschloss. Die korrekte Kontrollliste und
+das Urteil erreichten das Modell gemeinsam. Bei einem falschen Ergebnis
+hätte Terra vor Abschluss keine Gelegenheit zum Korrigieren gehabt. Sol
+erhielt die Liste vor seinem separaten Abschlussaufruf.
+
+Terras Produktschritte für erste Liste, Umbenennung und zweite Liste
+dauerten **308, 212 und 180 ms**. Der Gast beobachtete die Dateiwirkung
+4,393 s nach Beginn des ersten Gastaufrufs und 340 ms nach Beginn des
+auslösenden Compose. Beide Modelle verwendeten zwei Compose-Aufrufe und
+eine unabhängige Abschlussprüfung. Terras Urteil kam in diesem Paar
+2,863 s früher an. Auch die direkten Produktlaufzeiten unterschieden sich
+deutlich. Je eine Beobachtung erlaubt keine belastbare Rangfolge der Modelle.
