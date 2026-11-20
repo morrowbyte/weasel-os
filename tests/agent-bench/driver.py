@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(os.environ["BENCH_RUN"]).resolve()
 SOURCE = Path(os.environ["BENCH_SOURCE"]).resolve()
 MODE = os.environ["BENCH_FAMILY"]
-FAMILY = "files" if MODE == "files-os" else MODE
+FAMILY = {"files-os": "files", "edit-clipboard": "edit"}.get(MODE, MODE)
 HOME = "/home/operator"
 BENCH = HOME + "/bench"
 APP = "bench"
@@ -18,6 +18,8 @@ ALLOWED = {"private_status", "private_screenshot", "private_key", "private_text"
            "private_click", "private_scroll"}
 if MODE == "files-os":
     ALLOWED |= {"private_exchange_list", "private_exchange_lstat", "private_exchange_rename_noreplace"}
+elif MODE == "edit-clipboard":
+    ALLOWED |= {"private_clipboard_read", "private_clipboard_write"}
 assert FAMILY in {"edit", "files"}
 assert ROOT.stat().st_uid == os.getuid() and ROOT.stat().st_mode & 0o077 == 0
 

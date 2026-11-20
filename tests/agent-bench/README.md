@@ -126,3 +126,18 @@ Dateioperationen wird derselbe Produktpfad wie bei CLI- und MCP-Nutzung
 aufgerufen. Seine Teilbelege liefern `duration_ns`. Der unabhängige
 Prüfer kontrolliert die Dateinamen, die ursprünglichen Bytes, den
 Vordergrundentwurf und den Fokus über den Testdriver.
+
+## Dokumentauftrag mit privater Zwischenablage
+
+`start DRIVER RUN edit-clipboard` öffnet dasselbe Übergabeprotokoll in
+Mousepad wie `edit`. Zusätzlich zu den GUI-Werkzeugen kann das Modell
+`private_clipboard_write` mit `text` und `private_clipboard_read` ohne
+weitere Argumente im selben Compose wie private Tastenaktionen verwenden.
+Der Runner bindet jeden Schritt an die private Arbeitsfläche `bench`.
+Der Lesebeleg enthält unter `steps[i].result.results[0]` die Felder
+`text`, `mime` und `bytes`. Der Schreibbeleg bestätigt die Bytezahl.
+
+Im Ergebnisbericht erhält der Versuch den Modus `edit-clipboard` sowie
+die tatsächlich verwendeten Aktionen. Das Abschlussurteil vergleicht
+Original, gespeicherte Kopie und Inventardatei bytegenau und kontrolliert
+den Vordergrundentwurf und seinen Fokus wie beim visuellen Dokumentlauf.
